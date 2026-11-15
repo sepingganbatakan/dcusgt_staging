@@ -3,6 +3,8 @@ import {
   ALLOW_GUEST_EMPLOYEE_CREATION,
   APP_TIMEZONE,
   DEFAULT_EMPLOYEE_DISPLAY_LIMIT,
+  DEPARTMENT_SELECTION_MODE,
+  EMPLOYEE_SELECTION_MODE,
   SUPABASE_ANON_KEY,
   SUPABASE_URL
 } from "./config.js";
@@ -64,9 +66,17 @@ let guestStatusRequest = 0;
 let activeTimezone = (typeof APP_TIMEZONE === "string" && APP_TIMEZONE.trim())
   ? APP_TIMEZONE.trim()
   : "Asia/Jakarta";
+let waNotificationsEnabled = false;
 let employeeDisplayLimit = (typeof DEFAULT_EMPLOYEE_DISPLAY_LIMIT === "number" && DEFAULT_EMPLOYEE_DISPLAY_LIMIT > 0)
   ? DEFAULT_EMPLOYEE_DISPLAY_LIMIT
   : 4;
+
+if (!["tabs", "dropdown"].includes(DEPARTMENT_SELECTION_MODE)) {
+  throw new Error('DEPARTMENT_SELECTION_MODE must be "tabs" or "dropdown".');
+}
+if (!["list", "dropdown"].includes(EMPLOYEE_SELECTION_MODE)) {
+  throw new Error('EMPLOYEE_SELECTION_MODE must be "list" or "dropdown".');
+}
 
 function getActiveTimezone() {
   return activeTimezone;
@@ -83,6 +93,20 @@ async function syncAppTimezone() {
     }
   } catch (err) {
     console.warn("Could not sync app timezone from database, using config default:", err);
+  }
+}
+
+async function syncWhatsAppNotificationSetting() {
+  if (!client) return;
+  try {
+    const { data, error } = await client.rpc("get_wa_notifications_enabled");
+    if (error) throw error;
+    if (typeof data !== "boolean") {
+      throw new Error("Supabase returned an invalid WhatsApp notification setting.");
+    }
+    waNotificationsEnabled = data;
+  } catch (err) {
+    console.warn("Could not sync WhatsApp notification setting; keeping the current value:", err);
   }
 }
 
@@ -460,22 +484,35 @@ function updateProfileEmployeeOptions(selectedId = "") {
   const select = document.querySelector("#profile-employee");
   if (!select) return;
   const employeeToSelect = selectedId || select.value;
-  const departmentEmployees = employees.filter((item) => (!departmentId || item.department_id === departmentId) && item.is_active);
+  const showAllEmployees = !departmentId && (
+    EMPLOYEE_SELECTION_MODE === "list"
+    || (DEPARTMENT_SELECTION_MODE === "tabs" && currentProfileTab === "all")
+  );
+  const departmentEmployees = employees.filter((item) =>
+    item.is_active && (item.department_id === departmentId || showAllEmployees)
+  );
   select.innerHTML = '<option value="">Pilih nama karyawan</option>';
   for (const employee of departmentEmployees) {
     const option = document.createElement("option");
     option.value = employee.id;
-    option.textContent = employee.full_name;
+    const departmentName = departments.find((department) => department.id === employee.department_id)?.name;
+    option.textContent = showAllEmployees && departmentName
+      ? `${employee.full_name} — ${departmentName}`
+      : employee.full_name;
     select.append(option);
   }
-  if (!select.options.length || (select.options.length === 1 && !select.options[0].value)) {
+  if (!departmentId && !showAllEmployees) {
+    select.innerHTML = '<option value="">Pilih departemen terlebih dahulu</option>';
+  } else if (!select.options.length || (select.options.length === 1 && !select.options[0].value)) {
     select.innerHTML = '<option value="">Belum ada karyawan terdaftar</option>';
   }
   select.disabled = false;
   if (employees.some((item) => item.id === employeeToSelect && item.is_active)) {
     select.value = employeeToSelect;
   }
-  if (departmentId) {
+  if (DEPARTMENT_SELECTION_MODE === "dropdown") {
+    currentProfileTab = departmentId || "all";
+  } else if (departmentId) {
     currentProfileTab = departmentId;
   }
   syncProfileDepartmentTabsUI(currentProfileTab);
@@ -489,6 +526,19 @@ function syncGuestProfileToCheckup() {
   employeeSelect.value = guestProfile.employeeId;
   document.querySelector("#checkup-whatsapp").value = guestProfile.whatsapp;
   renderCheckupIdentitySummary();
+}
+
+function hasValidGuestProfile() {
+  return Boolean(
+    guestProfile
+    && departments.some((department) => department.id === guestProfile.departmentId)
+    && employees.some((employee) =>
+      employee.id === guestProfile.employeeId
+      && employee.department_id === guestProfile.departmentId
+      && employee.is_active
+    )
+    && isValidWhatsApp(guestProfile.whatsapp)
+  );
 }
 
 function renderCheckupIdentitySummary() {
@@ -543,10 +593,10 @@ function showDailyCheckupStatus(checkup) {
     const spanEl = completedNotice.querySelector("span");
     if (boldEl) boldEl.textContent = canSubmitMore
       ? "DCU hari ini berhasil tersimpan."
-      : "Tidak ada kuota DCU hari ini atau pola kerja belum diisi.";
+      : "Anda sudah mengisi DCU untuk hari ini.";
     if (spanEl) spanEl.textContent = canSubmitMore
       ? "Anda masih dapat mengisi lagi sesuai jadwal dan batas harian."
-      : "Lengkapi pola kerja dengan HR, atau isi kembali pada hari berikutnya jika kuota sudah tercapai.";
+      : "Silakan isi kembali pada hari berikutnya.";
   }
   showResult(checkup, checkup.readiness_status, checkup.checked_at, Boolean(checkup?.is_offline));
   resultCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -798,12 +848,15 @@ function formatDate(value, includeTime = true) {
 }
 
 function setActiveStep(step) {
+  if (guestMode && step === 1) step = 2;
   activeStep = step;
   document.querySelectorAll(".checkup-step").forEach((section) => {
     section.classList.toggle("hidden", Number(section.dataset.step) !== step);
   });
-  const percent = Math.round((step / 3) * 100);
-  document.querySelector("#step-caption").textContent = `LANGKAH ${step} DARI 3`;
+  const displayStep = guestMode ? step - 1 : step;
+  const totalSteps = guestMode ? 2 : 3;
+  const percent = Math.round((displayStep / totalSteps) * 100);
+  document.querySelector("#step-caption").textContent = `LANGKAH ${displayStep} DARI ${totalSteps}`;
   document.querySelector("#step-percent").textContent = `${percent}%`;
   document.querySelector("#progress-bar").style.width = `${percent}%`;
 }
@@ -889,7 +942,6 @@ function renderDepartmentTabs() {
 
   container.innerHTML = "";
 
-  // 1. Tab "Semua" di paling kiri
   const allBtn = document.createElement("button");
   allBtn.type = "button";
   allBtn.className = `department-tab ${currentCheckupTab === "all" ? "is-active" : ""}`;
@@ -899,6 +951,10 @@ function renderDepartmentTabs() {
   allBtn.innerHTML = `<span>Semua</span><span class="department-tab-count">${totalActive}</span>`;
   allBtn.addEventListener("click", () => {
     currentCheckupTab = "all";
+    if (EMPLOYEE_SELECTION_MODE === "dropdown") {
+      departmentSelect.value = "";
+      departmentSelect.dispatchEvent(new Event("change"));
+    }
     syncDepartmentTabsUI("all");
     renderEmployeeList("all");
   });
@@ -984,7 +1040,8 @@ function renderEmployeeList(departmentId = currentCheckupTab) {
   }
 
   if (scrollHint) {
-    scrollHint.classList.toggle("hidden", displayEmployees.length <= employeeDisplayLimit);
+    scrollHint.classList.toggle("hidden",
+      EMPLOYEE_SELECTION_MODE === "dropdown" || displayEmployees.length <= employeeDisplayLimit);
   }
 
   if (displayEmployees.length === 0) {
@@ -1093,7 +1150,6 @@ function renderProfileDepartmentTabs() {
 
   container.innerHTML = "";
 
-  // 1. Tab "Semua" di paling kiri
   const allBtn = document.createElement("button");
   allBtn.type = "button";
   allBtn.className = `department-tab ${currentProfileTab === "all" ? "is-active" : ""}`;
@@ -1103,6 +1159,10 @@ function renderProfileDepartmentTabs() {
   allBtn.innerHTML = `<span>Semua</span><span class="department-tab-count">${totalActive}</span>`;
   allBtn.addEventListener("click", () => {
     currentProfileTab = "all";
+    if (EMPLOYEE_SELECTION_MODE === "dropdown" && profileDept) {
+      profileDept.value = "";
+      profileDept.dispatchEvent(new Event("change"));
+    }
     syncProfileDepartmentTabsUI("all");
     renderProfileEmployeeList("all");
   });
@@ -1192,7 +1252,8 @@ function renderProfileEmployeeList(departmentId = currentProfileTab) {
   }
 
   if (scrollHint) {
-    scrollHint.classList.toggle("hidden", displayEmployees.length <= employeeDisplayLimit);
+    scrollHint.classList.toggle("hidden",
+      EMPLOYEE_SELECTION_MODE === "dropdown" || displayEmployees.length <= employeeDisplayLimit);
   }
 
   if (displayEmployees.length === 0) {
@@ -1292,18 +1353,25 @@ function updateEmployeeOptions() {
     : guestMode
       ? document.querySelector("#profile-department").value
       : departmentSelect.value;
+  const showAllEmployees = !departmentId
+    && DEPARTMENT_SELECTION_MODE === "tabs"
+    && EMPLOYEE_SELECTION_MODE === "dropdown"
+    && currentCheckupTab === "all";
   const departmentEmployees = employees.filter((employee) =>
-    employee.department_id === departmentId && employee.is_active
+    employee.is_active && (employee.department_id === departmentId || showAllEmployees)
   );
   employeeSelect.innerHTML = '<option value="">Pilih nama karyawan</option>';
   for (const employee of departmentEmployees) {
     const option = document.createElement("option");
     option.value = employee.id;
-    option.textContent = employee.full_name;
+    const departmentName = departments.find((department) => department.id === employee.department_id)?.name;
+    option.textContent = showAllEmployees && departmentName
+      ? `${employee.full_name} — ${departmentName}`
+      : employee.full_name;
     employeeSelect.append(option);
   }
   employeeSelect.disabled = false;
-  if (!departmentId) {
+  if (!departmentId && !showAllEmployees) {
     employeeSelect.innerHTML = '<option value="">Pilih departemen terlebih dahulu</option>';
   } else if (departmentEmployees.length === 0) {
     employeeSelect.innerHTML = '<option value="">Belum ada karyawan terdaftar</option>';
@@ -1319,8 +1387,46 @@ function updateEmployeeOptions() {
       : "Tidak menemukan nama? Hubungi HR untuk menambahkan karyawan.";
   if (guestMode) updateProfileEmployeeOptions();
 
+  if (DEPARTMENT_SELECTION_MODE === "dropdown") {
+    currentCheckupTab = departmentId || "all";
+  }
   syncDepartmentTabsUI(currentCheckupTab);
   renderEmployeeList(currentCheckupTab);
+}
+
+function applySelectionModes() {
+  const departmentDropdown = DEPARTMENT_SELECTION_MODE === "dropdown";
+  const employeeDropdown = EMPLOYEE_SELECTION_MODE === "dropdown";
+
+  for (const [select, isDropdown] of [
+    [departmentSelect, departmentDropdown],
+    [document.querySelector("#profile-department"), departmentDropdown],
+    [employeeSelect, employeeDropdown],
+    [document.querySelector("#profile-employee"), employeeDropdown]
+  ]) {
+    select.classList.toggle("sr-only", !isDropdown);
+    select.classList.toggle("field-input", isDropdown);
+    select.classList.toggle("mt-2", isDropdown);
+    select.classList.toggle("w-full", isDropdown);
+    if (isDropdown) {
+      select.removeAttribute("aria-hidden");
+      select.removeAttribute("tabindex");
+    } else {
+      select.setAttribute("aria-hidden", "true");
+      select.tabIndex = -1;
+    }
+  }
+
+  document.querySelector("#department-tabs-wrap").classList.toggle("hidden", departmentDropdown);
+  document.querySelector("#profile-department-tabs-wrap").classList.toggle("hidden", departmentDropdown);
+  document.querySelector("#employee-search-wrap").classList.toggle("hidden", employeeDropdown);
+  document.querySelector("#employee-list-scroll-wrap").classList.toggle("hidden", employeeDropdown);
+  document.querySelector("#employee-scroll-hint").classList.toggle("hidden", employeeDropdown);
+  document.querySelector("#profile-employee-search-wrap").classList.toggle("hidden", employeeDropdown);
+  document.querySelector("#profile-employee-list-scroll-wrap").classList.toggle("hidden", employeeDropdown);
+  document.querySelector("#profile-employee-scroll-hint").classList.toggle("hidden", employeeDropdown);
+  document.querySelector("#employee-count-badge").classList.toggle("hidden", employeeDropdown);
+  document.querySelector("#profile-employee-count-badge").classList.toggle("hidden", employeeDropdown);
 }
 
 async function loadDepartments() {
@@ -1492,10 +1598,12 @@ async function syncOfflineQueue(showToastNotice = false) {
       }
 
       let savedCheckup;
-      if (item.is_guest) {
+      const isGuestSubmission = Boolean(item.is_guest || guestMode || !currentUser);
+      if (isGuestSubmission) {
+        const deviceToken = item.device_token || guestProfile?.deviceToken || createDeviceToken();
         const { data, error } = await client.rpc("submit_guest_checkup", {
           p_employee_id: targetEmployeeId,
-          p_device_token: item.device_token || guestProfile?.deviceToken,
+          p_device_token: deviceToken,
           p_systolic: item.payload.systolic,
           p_diastolic: item.payload.diastolic,
           p_temperature_c: item.payload.temperature_c,
@@ -1861,6 +1969,9 @@ function showResult(payload, status, checkedAt, isOffline = false) {
         <span><b>Tersimpan di antrean offline.</b> Hasil merupakan evaluasi lokal dan akan otomatis disinkronkan saat terhubung internet.</span>
        </div>`
     : "";
+  const copyReportButtonHtml = waNotificationsEnabled
+    ? ""
+    : `<button id="copy-report" class="secondary-button mt-4 w-full" type="button"><i data-lucide="copy"></i> Salin laporan (WhatsApp)</button>`;
 
   resultCard.className = `panel-card result-card ${detail.result} mt-5`;
   resultCard.innerHTML = `<div class="flex items-start gap-3">
@@ -1879,10 +1990,10 @@ function showResult(payload, status, checkedAt, isOffline = false) {
     : status === "need_observation"
       ? "Pantau kondisi Anda dan ikuti prosedur kesehatan di tempat kerja."
       : "Tetap jaga kesehatan dan ikuti prosedur keselamatan kerja."}</p>
-  <button id="copy-report" class="secondary-button mt-4 w-full" type="button"><i data-lucide="copy"></i> Salin laporan (WhatsApp)</button>`;
+  ${copyReportButtonHtml}`;
   resultCard.dataset.report = text;
   resultCard.classList.remove("hidden");
-  document.querySelector("#copy-report").addEventListener("click", copyReport);
+  resultCard.querySelector("#copy-report")?.addEventListener("click", copyReport);
   refreshIcons();
   resultCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -1941,7 +2052,7 @@ async function submitCheckup(event) {
       action: "submit_checkup",
       is_guest: guestMode,
       employee_id: payload.employee_id,
-      device_token: guestMode ? guestProfile?.deviceToken : null,
+      device_token: guestMode ? (guestProfile?.deviceToken || createDeviceToken()) : null,
       payload,
       measured_at: measuredAt,
       preliminary_status: preliminaryStatus,
@@ -2050,6 +2161,7 @@ async function submitCheckup(event) {
       ? (guestProfile?.whatsapp || document.querySelector("#checkup-whatsapp")?.value || "")
       : "";
     const checkupId = savedCheckup?.id || savedCheckup?.checkup_id;
+    await syncWhatsAppNotificationSetting();
     showResult(payload, savedCheckup.readiness_status, savedCheckup.checked_at, false);
     if (checkupId && employeePhone) {
       dispatchWhatsAppNotification(checkupId, employeePhone);
@@ -2362,6 +2474,13 @@ async function exportCsv() {
 
 function setTab(tabName, refreshData = true) {
   if (guestMode && !["checkup", "profile"].includes(tabName)) return;
+  if (
+    guestMode
+    && tabName === "checkup"
+    && !hasValidGuestProfile()
+  ) {
+    tabName = "profile";
+  }
   if (!isAdmin() && tabName === "profile" && !guestMode) return;
   if (tabName === "summary") {
     document.querySelector("#history-readiness").value = "";
@@ -2439,6 +2558,7 @@ async function initializeApp(user) {
   }
   currentProfile = data;
   await syncAppTimezone();
+  await syncWhatsAppNotificationSetting();
   await syncEmployeeDisplayLimit();
   resetCheckupResponses();
   todayCheckupCount = null;
@@ -2525,6 +2645,7 @@ async function initializeGuestApp() {
     if (!enabled) {
       throw new Error("Mode tamu belum diaktifkan di Supabase. Lihat guest_mode.sql.");
     }
+    await syncWhatsAppNotificationSetting();
     await syncAppTimezone();
     await syncEmployeeDisplayLimit();
 
@@ -2589,25 +2710,19 @@ async function initializeGuestApp() {
   appShell.classList.add("guest-mode");
   document.querySelector("#profile-add-employee").disabled =
     !ALLOW_GUEST_EMPLOYEE_CREATION || !guestEmployeeCreationEnabled;
-  document.querySelector("#checkup-whatsapp-wrap").classList.remove("hidden");
-  document.querySelector("#checkup-whatsapp").required = true;
+  document.querySelector("#checkup-whatsapp-wrap").classList.add("hidden");
+  document.querySelector("#checkup-whatsapp").required = false;
+  checkupForm.classList.add("hidden");
+  checkupProgress.classList.add("hidden");
   await loadGuestDirectory();
   guestProfile = readGuestProfile();
-  if (
-    guestProfile
-    && departments.some((department) => department.id === guestProfile.departmentId)
-    && employees.some((employee) =>
-      employee.id === guestProfile.employeeId
-      && employee.department_id === guestProfile.departmentId
-      && employee.is_active
-    )
-    && isValidWhatsApp(guestProfile.whatsapp)
-  ) {
+  if (hasValidGuestProfile()) {
     if (!persistGuestProfile(guestProfile)) {
-      showCheckupForm(1);
+      setTab("profile", false);
       refreshIcons();
       return;
     }
+    setTab("checkup", false);
     syncGuestProfileToCheckup();
     syncGuestProfileForm();
     try {
@@ -2625,10 +2740,8 @@ async function initializeGuestApp() {
       showCheckupForm(restored ? activeStep : 1);
     }
   } else {
-    guestProfile = null;
-    syncGuestProfileForm();
+    setTab("profile", false);
     renderCheckupIdentitySummary();
-    setActiveStep(1);
   }
   refreshIcons();
 }
@@ -2690,6 +2803,7 @@ async function handleSignOut() {
 }
 
 function bindEvents() {
+  applySelectionModes();
   document.querySelector("#login-form").addEventListener("submit", handleLogin);
   document.querySelector("#signout-button").addEventListener("click", handleSignOut);
   document.querySelector("#guest-mode-button").addEventListener("click", async () => {
@@ -2713,7 +2827,7 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-prev]").forEach((button) => {
     button.addEventListener("click", () => {
-      setActiveStep(Math.max(1, activeStep - 1));
+      setActiveStep(Math.max(guestMode ? 2 : 1, activeStep - 1));
       saveCheckupDraft();
     });
   });
@@ -2727,6 +2841,18 @@ function bindEvents() {
   });
   departmentSelect.addEventListener("change", checkSelectedGuestDailyStatus);
   departmentSelect.addEventListener("change", checkAdminSelectedEmployeeDailyStatus);
+  employeeSelect.addEventListener("change", () => {
+    if (EMPLOYEE_SELECTION_MODE !== "dropdown") return;
+    const employee = employees.find((item) => item.id === employeeSelect.value);
+    if (employee && employee.department_id !== departmentSelect.value) {
+      if (currentCheckupTab === "all") {
+        currentCheckupTab = employee.department_id;
+      }
+      departmentSelect.value = employee.department_id;
+      departmentSelect.dispatchEvent(new Event("change"));
+      employeeSelect.value = employee.id;
+    }
+  });
   employeeSelect.addEventListener("change", () => {
     if (guestMode) saveCheckupIdentityIfComplete();
   });
@@ -2800,9 +2926,16 @@ function bindEvents() {
     updateProfileEmployeeOptions();
   });
   document.querySelector("#profile-employee").addEventListener("change", () => {
-    const employee = employees.find((item) => item.id === document.querySelector("#profile-employee").value);
-    if (employee) {
-      document.querySelector("#profile-department").value = employee.department_id;
+    const profileEmployee = document.querySelector("#profile-employee");
+    const profileDepartment = document.querySelector("#profile-department");
+    const employee = employees.find((item) => item.id === profileEmployee.value);
+    if (employee && employee.department_id !== profileDepartment.value) {
+      if (currentProfileTab === "all") {
+        currentProfileTab = employee.department_id;
+      }
+      profileDepartment.value = employee.department_id;
+      profileDepartment.dispatchEvent(new Event("change"));
+      profileEmployee.value = employee.id;
     }
   });
   document.querySelector("#guest-profile-form").addEventListener("submit", async (event) => {
@@ -2855,7 +2988,7 @@ function bindEvents() {
       updateProfileEmployeeOptions();
       document.querySelector("#profile-whatsapp").value = "";
       setActiveStep(1);
-      setTab("checkup");
+      setTab("profile");
       showToast("Profil perangkat berhasil dihapus.");
     } catch (error) {
       console.error("Could not clear guest profile from this browser:", error);
