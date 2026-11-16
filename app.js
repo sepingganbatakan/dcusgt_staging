@@ -267,10 +267,22 @@ function resetCheckupResponses() {
   document.querySelector("#diastolic").value = "";
   document.querySelector("#temperature").value = "36.5";
   document.querySelector("#notes").value = "";
-  checkupForm.querySelectorAll('input[name="fatigue_level"], input[name="sleep_quality"], input[name="symptoms"]')
+  checkupForm.querySelectorAll('input[name="fatigue_level"], input[name="sleep_quality"], input[name="symptoms"], input[name="has_complaint_today"]')
     .forEach((input) => { input.checked = false; });
+  updateComplaintSymptomsVisibility();
   updateTemperatureDisplay();
   setActiveStep(1);
+}
+
+function updateComplaintSymptomsVisibility() {
+  const hasComplaint = document.querySelector("#has-complaint-today").checked;
+  document.querySelector("#complaint-status").textContent = hasComplaint ? "Ya, ada keluhan" : "Tidak";
+  document.querySelector("#complaint-symptoms").classList.toggle("hidden", !hasComplaint);
+  if (!hasComplaint) {
+    checkupForm.querySelectorAll('#complaint-symptoms input[name="symptoms"]').forEach((input) => {
+      input.checked = false;
+    });
+  }
 }
 
 function persistCheckupSelection() {
@@ -326,6 +338,7 @@ function saveCheckupDraft() {
     temperature: document.querySelector("#temperature").value,
     fatigueLevel: checkupForm.querySelector('input[name="fatigue_level"]:checked')?.value ?? "",
     sleepQuality: checkupForm.querySelector('input[name="sleep_quality"]:checked')?.value ?? "",
+    hasComplaintToday: document.querySelector("#has-complaint-today").checked ? "yes" : "no",
     symptoms,
     notes: document.querySelector("#notes").value,
     step: activeStep
@@ -340,7 +353,7 @@ function saveCheckupDraft() {
 
 function isCheckupDraftField(target) {
   return ["systolic", "diastolic", "temperature", "notes"].includes(target?.id)
-    || ["fatigue_level", "sleep_quality", "symptoms"].includes(target?.name);
+    || ["fatigue_level", "sleep_quality", "symptoms", "has_complaint_today"].includes(target?.name);
 }
 
 function restoreCheckupDraft(employeeId) {
@@ -382,6 +395,8 @@ function restoreCheckupDraft(employeeId) {
   checkupForm.querySelectorAll('input[name="symptoms"]').forEach((input) => {
     input.checked = Boolean(draft.symptoms?.[input.value]);
   });
+  document.querySelector("#has-complaint-today").checked = draft.hasComplaintToday === "yes";
+  updateComplaintSymptomsVisibility();
   document.querySelector("#notes").value = typeof draft.notes === "string" ? draft.notes : "";
   updateTemperatureDisplay();
   setActiveStep(Number.isInteger(draft.step) && draft.step >= 1 && draft.step <= 3 ? draft.step : 2);
@@ -3005,6 +3020,7 @@ function bindEvents() {
     if (isCheckupDraftField(event.target)) saveCheckupDraft();
   });
   checkupForm.addEventListener("change", (event) => {
+    if (event.target?.name === "has_complaint_today") updateComplaintSymptomsVisibility();
     if (isCheckupDraftField(event.target)) saveCheckupDraft();
   });
   checkupForm.addEventListener("submit", submitCheckup);
