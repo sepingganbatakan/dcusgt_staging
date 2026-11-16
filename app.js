@@ -67,6 +67,7 @@ let activeTimezone = (typeof APP_TIMEZONE === "string" && APP_TIMEZONE.trim())
   ? APP_TIMEZONE.trim()
   : "Asia/Jakarta";
 let waNotificationsEnabled = false;
+let checkupLocationEnabled = false;
 let employeeDisplayLimit = (typeof DEFAULT_EMPLOYEE_DISPLAY_LIMIT === "number" && DEFAULT_EMPLOYEE_DISPLAY_LIMIT > 0)
   ? DEFAULT_EMPLOYEE_DISPLAY_LIMIT
   : 4;
@@ -108,6 +109,75 @@ async function syncWhatsAppNotificationSetting() {
   } catch (err) {
     console.warn("Could not sync WhatsApp notification setting; keeping the current value:", err);
   }
+}
+
+function applyCheckupLocationSettingUI() {
+  document.querySelector("#checkup-location-notice")
+    ?.classList.toggle("hidden", !checkupLocationEnabled);
+}
+
+async function syncCheckupLocationSetting() {
+  if (!client) return checkupLocationEnabled;
+  try {
+    const { data, error } = await client.rpc("get_checkup_location_enabled");
+    if (error) throw error;
+    if (typeof data !== "boolean") {
+      throw new Error("Supabase returned an invalid checkup location setting.");
+    }
+    checkupLocationEnabled = data;
+  } catch (err) {
+    console.warn("Could not sync checkup location setting; disabling location capture:", err);
+    checkupLocationEnabled = false;
+  }
+  applyCheckupLocationSettingUI();
+  return checkupLocationEnabled;
+}
+
+function getDeviceLocation() {
+  if (!navigator.geolocation) {
+    showToast("Lokasi perangkat tidak tersedia. Checkup tetap akan disimpan tanpa lokasi.", true);
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    try {
+      navigator.geolocation.getCurrentPosition(
+        ({ coords, timestamp }) => {
+          if (
+            !Number.isFinite(coords.latitude)
+            || !Number.isFinite(coords.longitude)
+            || !Number.isFinite(coords.accuracy)
+            || coords.accuracy < 0
+          ) {
+            showToast("Koordinat lokasi tidak valid. Checkup tetap akan disimpan tanpa lokasi.", true);
+            resolve(null);
+            return;
+          }
+
+          resolve({
+            location_latitude: coords.latitude,
+            location_longitude: coords.longitude,
+            location_accuracy_m: coords.accuracy,
+            location_captured_at: new Date(Number.isFinite(timestamp) ? timestamp : Date.now()).toISOString()
+          });
+        },
+        (error) => {
+          const reason = error.code === error.PERMISSION_DENIED
+            ? "Izin lokasi ditolak."
+            : error.code === error.POSITION_UNAVAILABLE
+              ? "Lokasi perangkat tidak dapat ditentukan."
+              : "Pengambilan lokasi melewati batas waktu.";
+          showToast(`${reason} Checkup tetap akan disimpan tanpa lokasi.`, true);
+          resolve(null);
+        },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+      );
+    } catch (error) {
+      console.warn("Could not request device location:", error);
+      showToast("Lokasi perangkat tidak dapat diminta. Checkup tetap akan disimpan tanpa lokasi.", true);
+      resolve(null);
+    }
+  });
 }
 
 function applyEmployeeDisplayLimitUI() {
@@ -1625,7 +1695,11 @@ async function syncOfflineQueue(showToastNotice = false) {
           p_fatigue_level: item.payload.fatigue_level,
           p_sleep_quality: item.payload.sleep_quality,
           p_symptoms: item.payload.symptoms,
-          p_notes: item.payload.notes
+          p_notes: item.payload.notes,
+          p_location_latitude: item.payload.location_latitude ?? null,
+          p_location_longitude: item.payload.location_longitude ?? null,
+          p_location_accuracy_m: item.payload.location_accuracy_m ?? null,
+          p_location_captured_at: item.payload.location_captured_at ?? null
         });
         if (error) throw error;
         savedCheckup = Array.isArray(data) ? data[0] : data;
@@ -1811,7 +1885,7 @@ async function loadCheckups() {
   historyList.innerHTML = '<div class="empty-state">Memuat riwayat…</div>';
   let query = client
     .from("checkups")
-    .select("id, employee_id, checked_at, systolic, diastolic, temperature_c, fatigue_level, sleep_quality, symptoms, notes, readiness_status, employees!inner(full_name, department_id, departments(name))")
+    .select("id, employee_id, checked_at, systolic, diastolic, temperature_c, fatigue_level, sleep_quality, symptoms, notes, readiness_status, location_latitude, location_longitude, location_accuracy_m, location_captured_at, employees!inner(full_name, department_id, departments(name))")
     .order("checked_at", { ascending: false })
     .limit(1000);
 
@@ -1885,6 +1959,14 @@ function renderHistory() {
     const symptoms = Object.entries(checkup.symptoms ?? {})
       .filter(([, selected]) => selected)
       .map(([key]) => symptomLabels[key] ?? key);
+    const locationDetails = checkup.location_latitude !== null
+      && checkup.location_latitude !== undefined
+      && checkup.location_longitude !== null
+      && checkup.location_longitude !== undefined
+      && Number.isFinite(Number(checkup.location_latitude))
+      && Number.isFinite(Number(checkup.location_longitude))
+      ? `<p class="mt-2 text-xs text-slate-500"><b class="text-slate-600">Lokasi:</b> ${Number(checkup.location_latitude).toFixed(6)}, ${Number(checkup.location_longitude).toFixed(6)} · akurasi ±${Number(checkup.location_accuracy_m).toFixed(1)} m${checkup.location_captured_at ? ` · ${escapeHtml(formatDate(checkup.location_captured_at))}` : ""}</p>`
+      : "";
     return `<article class="history-card">
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
@@ -1900,6 +1982,7 @@ function renderHistory() {
       </div>
       ${symptoms.length ? `<p class="mt-3 text-xs leading-5 text-slate-500"><b class="text-slate-600">Gejala:</b> ${escapeHtml(symptoms.join(", "))}</p>` : ""}
       ${checkup.notes ? `<p class="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-slate-500">${escapeHtml(checkup.notes)}</p>` : ""}
+      ${locationDetails}
     </article>`;
   }).join("");
   refreshIcons();
@@ -2050,14 +2133,22 @@ async function submitCheckup(event) {
     return;
   }
 
+  if (navigator.onLine) await syncCheckupLocationSetting();
+  const locationNotice = checkupLocationEnabled
+    ? "\n\nPengaturan lokasi aktif. Browser akan meminta izin untuk mengambil koordinat saat pengiriman; checkup tetap dapat dikirim tanpa lokasi."
+    : "";
   const confirmed = window.confirm(
-    "Pastikan seluruh data DCU sudah benar. DCU hanya dapat diisi satu kali dalam sehari dan tidak dapat diubah setelah dikirim. Apakah Anda yakin ingin menyimpan checkup ini?"
+    `Pastikan seluruh data DCU sudah benar. DCU hanya dapat diisi satu kali dalam sehari dan tidak dapat diubah setelah dikirim.${locationNotice}\n\nApakah Anda yakin ingin menyimpan checkup ini?`
   );
   if (!confirmed) return;
 
   const payload = collectCheckup();
   const button = document.querySelector("#submit-checkup");
   setBusy(button, true, "Menyimpan…");
+
+  if (checkupLocationEnabled) {
+    Object.assign(payload, await getDeviceLocation() ?? {});
+  }
 
   const isOffline = !navigator.onLine;
 
@@ -2146,7 +2237,11 @@ async function submitCheckup(event) {
         p_fatigue_level: payload.fatigue_level,
         p_sleep_quality: payload.sleep_quality,
         p_symptoms: payload.symptoms,
-        p_notes: payload.notes
+        p_notes: payload.notes,
+        p_location_latitude: payload.location_latitude ?? null,
+        p_location_longitude: payload.location_longitude ?? null,
+        p_location_accuracy_m: payload.location_accuracy_m ?? null,
+        p_location_captured_at: payload.location_captured_at ?? null
       });
       if (error) throw error;
       savedCheckup = Array.isArray(data) ? data[0] : data;
@@ -2435,7 +2530,8 @@ function triggerCsvDownload(items) {
   if (!items?.length) return false;
   const header = [
     "Waktu checkup", "Nama karyawan", "Departemen", "Tekanan sistolik", "Tekanan diastolik",
-    "Suhu (C)", "Kelelahan (1-5)", "Kualitas tidur (1-5)", "Gejala", "Catatan", "Status"
+    "Suhu (C)", "Kelelahan (1-5)", "Kualitas tidur (1-5)", "Gejala", "Catatan", "Status",
+    "Latitude", "Longitude", "Akurasi lokasi (m)", "Waktu pengambilan lokasi"
   ];
   const rows = items.map((item) => [
     item.checked_at,
@@ -2448,7 +2544,11 @@ function triggerCsvDownload(items) {
     item.sleep_quality,
     Object.entries(item.symptoms ?? {}).filter(([, selected]) => selected).map(([key]) => symptomLabels[key] ?? key).join("; "),
     item.notes,
-    statusDetails[item.readiness_status]?.label ?? item.readiness_status
+    statusDetails[item.readiness_status]?.label ?? item.readiness_status,
+    item.location_latitude,
+    item.location_longitude,
+    item.location_accuracy_m,
+    item.location_captured_at
   ]);
   const csv = "\uFEFF" + [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -2579,6 +2679,7 @@ async function initializeApp(user) {
   currentProfile = data;
   await syncAppTimezone();
   await syncWhatsAppNotificationSetting();
+  await syncCheckupLocationSetting();
   await syncEmployeeDisplayLimit();
   resetCheckupResponses();
   todayCheckupCount = null;
@@ -2667,6 +2768,7 @@ async function initializeGuestApp() {
     }
     await syncWhatsAppNotificationSetting();
     await syncAppTimezone();
+    await syncCheckupLocationSetting();
     await syncEmployeeDisplayLimit();
 
     guestEmployeeCreationEnabled = false;
@@ -3180,6 +3282,7 @@ async function boot() {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
   });
   await syncAppTimezone();
+  await syncCheckupLocationSetting();
   await syncEmployeeDisplayLimit();
 
   client.auth.onAuthStateChange((_event, session) => {
