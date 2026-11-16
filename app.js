@@ -23,6 +23,10 @@ const supabaseFactory = window.supabase?.createClient;
 const loginScreen = document.querySelector("#login-screen");
 const appShell = document.querySelector("#app-shell");
 const toastElement = document.querySelector("#toast");
+const startupScreen = document.querySelector("#startup-screen");
+const startupMessage = document.querySelector("#startup-message");
+const startupRetryButton = document.querySelector("#startup-retry-button");
+const privacyNoticeModal = document.querySelector("#privacy-notice-modal");
 const departmentSelect = document.querySelector("#department-select");
 const employeeSelect = document.querySelector("#employee-select");
 const checkupForm = document.querySelector("#checkup-form");
@@ -49,6 +53,7 @@ let client;
 let currentUser;
 let currentProfile;
 let currentEmployeeId;
+let privacyGatePassed = false;
 let guestMode = false;
 let guestEmployeeCreationEnabled = false;
 let guestProfile = null;
@@ -223,6 +228,87 @@ function showToast(message, isError = false) {
   toastElement.classList.toggle("error", isError);
   toastElement.classList.add("visible");
   toastTimeout = window.setTimeout(() => toastElement.classList.remove("visible"), 3500);
+}
+
+function showPrivacyNoticeError(error) {
+  console.error("Could not load mandatory privacy notice settings:", error);
+  startupMessage.textContent = `Informasi penggunaan aplikasi tidak dapat dimuat. Aplikasi belum dapat digunakan. Periksa koneksi atau konfigurasi Supabase, lalu coba lagi. (${error.message})`;
+  startupMessage.setAttribute("role", "alert");
+  startupRetryButton.classList.remove("hidden");
+}
+
+function completePrivacyNotice() {
+  privacyGatePassed = true;
+  privacyNoticeModal.close();
+  startupScreen.classList.add("hidden");
+}
+
+async function requestPrivacyNotice() {
+  const { data, error } = await client.rpc("get_dcu_notice_settings");
+  if (error) throw error;
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("Supabase returned invalid DCU notice settings.");
+  }
+
+  const requiredTextFields = ["legal_basis", "dcu_summary", "privacy_message", "consent_statement"];
+  for (const field of requiredTextFields) {
+    if (typeof data[field] !== "string" || !data[field].trim()) {
+      throw new Error(`Supabase returned an invalid ${field} notice setting.`);
+    }
+  }
+  if (!["consent_required", "notice_acknowledgement", "disabled"].includes(data.mode)) {
+    throw new Error("Supabase returned an unsupported DCU notice mode.");
+  }
+
+  if (data.mode === "disabled") {
+    completePrivacyNotice();
+    return;
+  }
+
+  const summaryWrap = document.querySelector("#privacy-notice-summary-wrap");
+  const legalWrap = document.querySelector("#privacy-notice-legal-wrap");
+  const consentForm = document.querySelector("#privacy-notice-consent-form");
+  const acknowledgeWrap = document.querySelector("#privacy-notice-acknowledge-wrap");
+  const consentCheckbox = document.querySelector("#privacy-notice-consent-checkbox");
+
+  document.querySelector("#privacy-notice-summary").textContent = data.dcu_summary;
+  document.querySelector("#privacy-notice-legal").textContent = data.legal_basis;
+  document.querySelector("#privacy-notice-privacy").textContent = data.privacy_message;
+  document.querySelector("#privacy-notice-consent-statement").textContent = data.consent_statement;
+  consentCheckbox.checked = false;
+  document.querySelector("#privacy-notice-agree-button").disabled = true;
+  summaryWrap.classList.toggle("hidden", data.mode !== "consent_required");
+  legalWrap.classList.toggle("hidden", data.mode !== "notice_acknowledgement");
+  consentForm.classList.toggle("hidden", data.mode !== "consent_required");
+  acknowledgeWrap.classList.toggle("hidden", data.mode !== "notice_acknowledgement");
+  document.querySelector("#privacy-notice-blocked-message").classList.add("hidden");
+  document.querySelector("#privacy-notice-title").textContent = data.mode === "consent_required"
+    ? "Ketentuan Pengisian DCU"
+    : "Informasi Penggunaan Data";
+
+  privacyNoticeModal.showModal();
+}
+
+function bindPrivacyNoticeEvents() {
+  const consentCheckbox = document.querySelector("#privacy-notice-consent-checkbox");
+  const consentForm = document.querySelector("#privacy-notice-consent-form");
+  const blockedMessage = document.querySelector("#privacy-notice-blocked-message");
+
+  consentCheckbox.addEventListener("change", () => {
+    document.querySelector("#privacy-notice-agree-button").disabled = !consentCheckbox.checked;
+  });
+  consentForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!consentCheckbox.checked) return;
+    completePrivacyNotice();
+  });
+  document.querySelector("#privacy-notice-decline-button").addEventListener("click", () => {
+    blockedMessage.textContent = "Tanpa persetujuan, Anda tidak dapat melanjutkan penggunaan aplikasi. Anda dapat menutup halaman ini.";
+    blockedMessage.classList.remove("hidden");
+  });
+  document.querySelector("#privacy-notice-acknowledge-button").addEventListener("click", completePrivacyNotice);
+  privacyNoticeModal.addEventListener("cancel", (event) => event.preventDefault());
+  startupRetryButton.addEventListener("click", () => window.location.reload());
 }
 
 function escapeHtml(value = "") {
@@ -3254,10 +3340,12 @@ function bindEvents() {
   });
 
   window.addEventListener("online", () => {
+    if (!privacyGatePassed) return;
     updateNetworkAndQueueUI();
     syncOfflineQueue(false);
   });
   window.addEventListener("offline", () => {
+    if (!privacyGatePassed) return;
     updateNetworkAndQueueUI();
   });
   offlineQueueBadge?.addEventListener("click", openQueueModal);
@@ -3268,6 +3356,7 @@ function bindEvents() {
 }
 async function boot() {
   bindEvents();
+  bindPrivacyNoticeEvents();
   updateTemperatureDisplay();
   setActiveStep(1);
   refreshIcons();
@@ -3278,24 +3367,23 @@ async function boot() {
     });
   }
 
+  if (!supabaseFactory) {
+    throw new Error("Supabase SDK gagal dimuat dari CDN.");
+  }
+  if (SUPABASE_URL.includes("YOUR_PROJECT_ID") || SUPABASE_ANON_KEY.includes("YOUR_SUPABASE")) {
+    throw new Error("Isi URL dan anon/publishable key Supabase di config.js.");
+  }
+  client = supabaseFactory(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+  });
+  await requestPrivacyNotice();
+  client = supabaseFactory(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+  });
   await updateNetworkAndQueueUI();
   if (navigator.onLine) {
     syncOfflineQueue(false);
   }
-
-  if (!supabaseFactory) {
-    await showLogin();
-    showToast("Supabase SDK gagal dimuat dari CDN.", true);
-    return;
-  }
-  if (SUPABASE_URL.includes("YOUR_PROJECT_ID") || SUPABASE_ANON_KEY.includes("YOUR_SUPABASE")) {
-    await showLogin();
-    showToast("Isi URL dan anon/publishable key Supabase di config.js.", true);
-    return;
-  }
-  client = supabaseFactory(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
-  });
   await syncAppTimezone();
   await syncCheckupLocationSetting();
   await syncEmployeeDisplayLimit();
@@ -3339,6 +3427,10 @@ async function boot() {
 
 boot().catch((error) => {
   console.error("Application startup failed:", error);
+  if (!privacyGatePassed) {
+    showPrivacyNoticeError(error);
+    return;
+  }
   showLogin();
   showToast(`Aplikasi gagal dimulai: ${error.message}`, true);
 });
