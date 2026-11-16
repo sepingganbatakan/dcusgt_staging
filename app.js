@@ -256,6 +256,9 @@ async function requestPrivacyNotice() {
       throw new Error(`Supabase returned an invalid ${field} notice setting.`);
     }
   }
+  if (typeof data.legal_basis_enabled !== "boolean" || typeof data.dcu_summary_enabled !== "boolean") {
+    throw new Error("Supabase returned invalid DCU notice visibility settings.");
+  }
   if (!["consent_required", "notice_acknowledgement", "disabled"].includes(data.mode)) {
     throw new Error("Supabase returned an unsupported DCU notice mode.");
   }
@@ -277,14 +280,12 @@ async function requestPrivacyNotice() {
   document.querySelector("#privacy-notice-consent-statement").textContent = data.consent_statement;
   consentCheckbox.checked = false;
   document.querySelector("#privacy-notice-agree-button").disabled = true;
-  summaryWrap.classList.toggle("hidden", data.mode !== "consent_required");
-  legalWrap.classList.toggle("hidden", data.mode !== "notice_acknowledgement");
+  summaryWrap.classList.toggle("hidden", !data.dcu_summary_enabled);
+  legalWrap.classList.toggle("hidden", !data.legal_basis_enabled);
   consentForm.classList.toggle("hidden", data.mode !== "consent_required");
   acknowledgeWrap.classList.toggle("hidden", data.mode !== "notice_acknowledgement");
   document.querySelector("#privacy-notice-blocked-message").classList.add("hidden");
-  document.querySelector("#privacy-notice-title").textContent = data.mode === "consent_required"
-    ? "Ketentuan Pengisian DCU"
-    : "Informasi Penggunaan Data";
+  document.querySelector("#privacy-notice-title").textContent = "Informasi Penggunaan Data";
 
   privacyNoticeModal.showModal();
 }
