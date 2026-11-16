@@ -29,6 +29,7 @@ const checkupForm = document.querySelector("#checkup-form");
 const checkupProgress = document.querySelector("#checkup-progress");
 const resultCard = document.querySelector("#result-card");
 const employeeModal = document.querySelector("#employee-modal");
+const checkupConfirmModal = document.querySelector("#checkup-confirm-modal");
 const exportConfirmModal = document.querySelector("#export-confirm-modal");
 const historyList = document.querySelector("#history-list");
 const offlineQueueBadge = document.querySelector("#offline-queue-badge");
@@ -2128,18 +2129,24 @@ async function dispatchWhatsAppNotification(checkupId, employeePhone) {
 
 async function submitCheckup(event) {
   event.preventDefault();
+  if (checkupConfirmModal.open) return;
   if (!validateStep(1) || !validateStep(2)) {
     setActiveStep(activeStep === 1 ? 1 : 2);
     return;
   }
 
   if (navigator.onLine) await syncCheckupLocationSetting();
-  const locationNotice = checkupLocationEnabled
-    ? "\n\nPengaturan lokasi aktif. Browser akan meminta izin untuk mengambil koordinat saat pengiriman; checkup tetap dapat dikirim tanpa lokasi."
-    : "";
-  const confirmed = window.confirm(
-    `Pastikan seluruh data DCU sudah benar. DCU hanya dapat diisi satu kali dalam sehari dan tidak dapat diubah setelah dikirim.${locationNotice}\n\nApakah Anda yakin ingin menyimpan checkup ini?`
-  );
+  document.querySelector("#checkup-location-confirmation")
+    ?.classList.toggle("hidden", !checkupLocationEnabled);
+  checkupConfirmModal.returnValue = "";
+  const confirmation = new Promise((resolve) => {
+    checkupConfirmModal.addEventListener("close", () => {
+      resolve(checkupConfirmModal.returnValue === "confirm");
+    }, { once: true });
+  });
+  checkupConfirmModal.showModal();
+  refreshIcons();
+  const confirmed = await confirmation;
   if (!confirmed) return;
 
   const payload = collectCheckup();
@@ -3186,6 +3193,14 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-summary-filter]").forEach((card) => {
     card.addEventListener("click", () => openSummaryFilter(card.dataset.summaryFilter));
+  });
+  document.querySelector("#close-checkup-confirm-modal")?.addEventListener("click", () => checkupConfirmModal.close());
+  document.querySelector("#cancel-checkup-submit")?.addEventListener("click", () => checkupConfirmModal.close());
+  checkupConfirmModal?.addEventListener("click", (event) => {
+    if (event.target === checkupConfirmModal) checkupConfirmModal.close();
+  });
+  document.querySelector("#confirm-checkup-submit")?.addEventListener("click", () => {
+    checkupConfirmModal.close("confirm");
   });
   document.querySelector("#export-csv").addEventListener("click", exportCsv);
   document.querySelector("#close-export-modal")?.addEventListener("click", () => exportConfirmModal.close());

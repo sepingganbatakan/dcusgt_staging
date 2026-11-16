@@ -367,6 +367,29 @@
       </form>
     </dialog>
 
+    <dialog id="checkup-confirm-modal" class="modal" aria-labelledby="checkup-confirm-title">
+      <div class="modal-card">
+        <div class="mb-4 flex items-start justify-between">
+          <div class="min-w-0 pr-3">
+            <p class="eyebrow">KONFIRMASI DCU</p>
+            <h2 id="checkup-confirm-title" class="mt-1 font-display text-xl font-extrabold text-slate-900">Periksa kembali data DCU</h2>
+          </div>
+          <button id="close-checkup-confirm-modal" class="icon-button" type="button" aria-label="Tutup"><i data-lucide="x"></i></button>
+        </div>
+
+        <div class="rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-sm leading-6 text-amber-900">
+          <p class="flex items-center gap-1.5 font-bold"><i data-lucide="alert-triangle" class="h-4 w-4 shrink-0 text-amber-600"></i> Perhatian</p>
+          <p class="mt-1">Pastikan seluruh data DCU sudah benar sebelum dikirim. Anda hanya memiliki satu kesempatan mengisi DCU dalam sehari dan data tidak dapat diubah setelah dikirim.</p>
+        </div>
+        <p id="checkup-location-confirmation" class="mt-3 hidden text-xs leading-5 text-slate-500">Pengaturan lokasi aktif. Browser akan meminta izin untuk mengambil koordinat saat pengiriman; DCU tetap dapat dikirim tanpa lokasi.</p>
+
+        <div class="mt-5 space-y-2.5">
+          <button id="confirm-checkup-submit" class="primary-button w-full justify-center" type="button">Ya, kirim DCU <i data-lucide="check"></i></button>
+          <button id="cancel-checkup-submit" class="secondary-button w-full justify-center" type="button">Kembali periksa data</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="export-confirm-modal" class="modal">
       <div class="modal-card">
         <div class="mb-4 flex items-start justify-between">
