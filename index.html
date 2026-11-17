@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f5f7fb">
     <meta name="description" content="Daily Checkup — pencatatan kesiapan kerja harian.">
-    <title>Daily Checkup</title>
+    <title>DCU - PEP Sangatta</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -141,6 +141,7 @@
           <section class="checkup-step space-y-4" data-step="1">
             <div class="panel-card">
               <div class="mb-4 flex items-center gap-2"><i data-lucide="user-round" class="section-icon"></i><h2 class="section-title">Identitas</h2></div>
+              <div id="checkup-identity-controls">
               <label class="field-label" id="department-tabs-label" for="department-select">Departemen</label>
               <div id="department-tabs-wrap" class="department-tabs-wrap mt-2">
                 <div id="department-tabs" class="department-tabs flex gap-2 overflow-x-auto pb-1 scrollbar-none" role="tablist" aria-labelledby="department-tabs-label">
@@ -172,6 +173,7 @@
                 </select>
               </div>
               <p id="employee-hint" class="mt-2 text-xs leading-5 text-slate-500"></p>
+              </div>
               <div id="checkup-whatsapp-wrap" class="mt-4 hidden">
                 <label class="field-label" for="checkup-whatsapp">Nomor WhatsApp</label>
                 <input id="checkup-whatsapp" class="field-input mt-2" type="tel" inputmode="tel" autocomplete="tel" maxlength="24" placeholder="Contoh: 081234567890">

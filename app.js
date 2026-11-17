@@ -53,6 +53,7 @@ let client;
 let currentUser;
 let currentProfile;
 let currentEmployeeId;
+let currentDepartmentId;
 let privacyGatePassed = false;
 let guestMode = false;
 let guestEmployeeCreationEnabled = false;
@@ -328,6 +329,18 @@ function refreshIcons() {
 
 function isAdmin() {
   return ["admin", "hr"].includes(currentProfile?.role);
+}
+
+function isDepartmentRepresentative() {
+  return currentProfile?.role === "department_rep";
+}
+
+function isSummaryViewer() {
+  return isAdmin() || isDepartmentRepresentative();
+}
+
+function isEmployeeAccount() {
+  return ["employee", "department_rep"].includes(currentProfile?.role);
 }
 
 function normalizeWhatsApp(value) {
@@ -774,10 +787,11 @@ function showDailyCheckupStatus(checkup) {
   showResult(checkup, checkup.readiness_status, checkup.checked_at, Boolean(checkup?.is_offline));
   resultCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
 
-  // Add "Pilih karyawan lain" button for all users (guest, employee, admin)
+  // Department representatives must keep their linked checkup identity.
   const existingBtn = document.querySelector('.admin-employee-switch-btn');
   if (existingBtn) existingBtn.remove();
-  
+  if (isDepartmentRepresentative()) return;
+
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'secondary-button mt-4 w-full admin-employee-switch-btn';
@@ -1543,7 +1557,7 @@ function updateEmployeeOptions() {
       : employee.full_name;
     employeeSelect.append(option);
   }
-  employeeSelect.disabled = false;
+  employeeSelect.disabled = isDepartmentRepresentative();
   if (!departmentId && !showAllEmployees) {
     employeeSelect.innerHTML = '<option value="">Pilih departemen terlebih dahulu</option>';
   } else if (departmentEmployees.length === 0) {
@@ -1621,8 +1635,13 @@ async function loadDepartments() {
   }
 
   const historyDepartment = document.querySelector("#history-department");
-  historyDepartment.innerHTML = '<option value="">Semua departemen</option>' + options;
-  if (departments.some((department) => department.id === selectedHistoryDepartment)) {
+  historyDepartment.innerHTML = isDepartmentRepresentative()
+    ? options
+    : '<option value="">Semua departemen</option>' + options;
+  historyDepartment.disabled = isDepartmentRepresentative();
+  if (isDepartmentRepresentative() && departments.some((department) => department.id === currentDepartmentId)) {
+    historyDepartment.value = currentDepartmentId;
+  } else if (departments.some((department) => department.id === selectedHistoryDepartment)) {
     historyDepartment.value = selectedHistoryDepartment;
   }
 
@@ -1841,7 +1860,7 @@ async function syncOfflineQueue(showToastNotice = false) {
     try {
       const dailyCheckup = guestMode
         ? await loadGuestDailyStatus()
-        : currentProfile?.role === "employee"
+        : isEmployeeAccount()
           ? await loadAuthenticatedDailyCheckup(currentEmployeeId)
           : null;
       if (dailyCheckup) showDailyCheckupStatus(dailyCheckup);
@@ -1945,12 +1964,30 @@ async function loadEmployees() {
     departmentSelect.value = ownEmployee.department_id;
     updateEmployeeOptions();
     employeeSelect.value = ownEmployee.id;
-    departmentSelect.disabled = false;
-    employeeSelect.disabled = false;
+    departmentSelect.disabled = isDepartmentRepresentative();
+    employeeSelect.disabled = isDepartmentRepresentative();
     syncEmployeeListUI(ownEmployee.id);
+    if (isDepartmentRepresentative()) {
+      document.querySelector("#checkup-identity-controls").classList.add("hidden");
+      document.querySelector("#checkup-identity-name").textContent = ownEmployee.full_name;
+      document.querySelector("#checkup-identity-department").textContent =
+        departments.find((department) => department.id === ownEmployee.department_id)?.name ?? "—";
+      document.querySelector("#checkup-identity-summary").classList.remove("hidden");
+      document.querySelector("#checkup-identity-summary").classList.add("flex");
+      document.querySelector("#edit-checkup-identity").classList.add("hidden");
+    } else {
+      document.querySelector("#checkup-identity-controls").classList.remove("hidden");
+      document.querySelector("#checkup-identity-summary").classList.add("hidden");
+      document.querySelector("#checkup-identity-summary").classList.remove("flex");
+      document.querySelector("#edit-checkup-identity").classList.remove("hidden");
+    }
   } else if (isAdmin()) {
-    departmentSelect.disabled = false;
-    employeeSelect.disabled = false;
+    document.querySelector("#checkup-identity-controls").classList.remove("hidden");
+    document.querySelector("#checkup-identity-summary").classList.add("hidden");
+    document.querySelector("#checkup-identity-summary").classList.remove("flex");
+    document.querySelector("#edit-checkup-identity").classList.remove("hidden");
+    departmentSelect.disabled = isDepartmentRepresentative();
+    employeeSelect.disabled = isDepartmentRepresentative();
     if (employees.some((employee) => employee.id === selectedEmployee && employee.department_id === departmentSelect.value)) {
       employeeSelect.value = selectedEmployee;
       syncEmployeeListUI(selectedEmployee);
@@ -1964,7 +2001,9 @@ function getHistoryFilters() {
   return {
     from: document.querySelector("#filter-from").value,
     to: document.querySelector("#filter-to").value,
-    departmentId: document.querySelector("#history-department").value,
+    departmentId: isDepartmentRepresentative()
+      ? currentDepartmentId
+      : document.querySelector("#history-department").value,
     readinessStatus: document.querySelector("#history-readiness").value
   };
 }
@@ -1999,30 +2038,40 @@ async function loadCheckups() {
     throw error;
   }
   checkups = data ?? [];
-  if (isAdmin()) await loadDailyCoverage();
+  if (isSummaryViewer()) await loadDailyCoverage();
   renderHistory();
   renderSummary();
 }
 
 async function loadDailyCoverage() {
   const { start, end } = getDateRange();
+  const departmentId = isDepartmentRepresentative() ? currentDepartmentId : null;
+  const checkupSelect = departmentId ? "id, employees!inner(department_id)" : "id";
+  let checkupQuery = client
+    .from("checkups")
+    .select(checkupSelect, { count: "exact", head: true })
+    .gte("checked_at", start)
+    .lt("checked_at", end);
+  let employeeQuery = client
+    .from("employees")
+    .select("id", { count: "exact", head: true })
+    .eq("is_active", true);
+  if (departmentId) {
+    checkupQuery = checkupQuery.eq("employees.department_id", departmentId);
+    employeeQuery = employeeQuery.eq("department_id", departmentId);
+  }
   const [checkupResult, employeeResult, readinessCountEntries] = await Promise.all([
-    client
-      .from("checkups")
-      .select("id", { count: "exact", head: true })
-      .gte("checked_at", start)
-      .lt("checked_at", end),
-    client
-      .from("employees")
-      .select("id", { count: "exact", head: true })
-      .eq("is_active", true),
+    checkupQuery,
+    employeeQuery,
     Promise.all(Object.keys(statusDetails).map(async (status) => {
-      const result = await client
+      let query = client
         .from("checkups")
-        .select("id", { count: "exact", head: true })
+        .select(departmentId ? "id, employees!inner(department_id)" : "id", { count: "exact", head: true })
         .gte("checked_at", start)
         .lt("checked_at", end)
         .eq("readiness_status", status);
+      if (departmentId) query = query.eq("employees.department_id", departmentId);
+      const result = await query;
       if (result.error) throw result.error;
       return [status, result.count ?? 0];
     }))
@@ -2077,7 +2126,7 @@ function renderHistory() {
 }
 
 function renderSummary() {
-  const counts = isAdmin() && todayReadinessCounts
+  const counts = isSummaryViewer() && todayReadinessCounts
     ? {
         fit: todayReadinessCounts.fit_to_work,
         observe: todayReadinessCounts.need_observation,
@@ -2088,7 +2137,7 @@ function renderSummary() {
         observe: checkups.filter((item) => item.readiness_status === "need_observation").length,
         rest: checkups.filter((item) => item.readiness_status === "rest_recommended").length
       };
-  if (isAdmin() && todayCheckupCount !== null && activeEmployeeCount !== null) {
+  if (isSummaryViewer() && todayCheckupCount !== null && activeEmployeeCount !== null) {
     const coverage = activeEmployeeCount
       ? Math.min(100, Math.round((todayCheckupCount / activeEmployeeCount) * 100))
       : 0;
@@ -2108,7 +2157,7 @@ function collectCheckup() {
     [...checkupForm.querySelectorAll('input[name="symptoms"]')].map((input) => [input.value, input.checked])
   );
   return {
-    employee_id: employeeSelect.value,
+    employee_id: isDepartmentRepresentative() ? currentEmployeeId : employeeSelect.value,
     systolic: Number(document.querySelector("#systolic").value),
     diastolic: Number(document.querySelector("#diastolic").value),
     temperature_c: Number(document.querySelector("#temperature").value),
@@ -2268,8 +2317,8 @@ async function submitCheckup(event) {
     showResult(payload, preliminaryStatus, measuredAt, true);
 
     checkupForm.reset();
-    departmentSelect.disabled = false;
-    employeeSelect.disabled = false;
+    departmentSelect.disabled = isDepartmentRepresentative();
+    employeeSelect.disabled = isDepartmentRepresentative();
     if (!guestMode && currentEmployeeId) {
       const ownEmployee = employees.find((employee) => employee.id === currentEmployeeId);
       if (ownEmployee) {
@@ -2293,7 +2342,7 @@ async function submitCheckup(event) {
         readiness_status: preliminaryStatus,
         is_offline: true
       });
-    } else if (currentProfile?.role === "employee") {
+    } else if (isEmployeeAccount()) {
       showDailyCheckupStatus({
         ...payload,
         checked_at: measuredAt,
@@ -2302,7 +2351,7 @@ async function submitCheckup(event) {
       });
     }
     updateTemperatureDisplay();
-    if (!guestMode && currentProfile?.role !== "employee") setActiveStep(1);
+    if (!guestMode && !isEmployeeAccount()) setActiveStep(1);
     await updateNetworkAndQueueUI();
     showToast("DCU disimpan di antrean offline. Otomatis dikirim saat online.");
   };
@@ -2353,7 +2402,7 @@ async function submitCheckup(event) {
     }
     let canSubmitMore = false;
     let submissionStatusError = null;
-    if (guestMode || currentProfile?.role === "employee") {
+    if (guestMode || isEmployeeAccount()) {
       const { data, error } = await client.rpc("can_submit_additional_dcu", {
         p_employee_id: payload.employee_id,
         p_device_token: guestMode ? guestProfile.deviceToken : null
@@ -2376,8 +2425,8 @@ async function submitCheckup(event) {
       dispatchWhatsAppNotification(checkupId, employeePhone);
     }
     checkupForm.reset();
-    departmentSelect.disabled = false;
-    employeeSelect.disabled = false;
+    departmentSelect.disabled = isDepartmentRepresentative();
+    employeeSelect.disabled = isDepartmentRepresentative();
     if (!guestMode && currentEmployeeId) {
       const ownEmployee = employees.find((employee) => employee.id === currentEmployeeId);
       if (ownEmployee) {
@@ -2400,7 +2449,7 @@ async function submitCheckup(event) {
         readiness_status: savedCheckup.readiness_status,
         can_submit_more: canSubmitMore
       });
-    } else if (currentProfile?.role === "employee") {
+    } else if (isEmployeeAccount()) {
       showDailyCheckupStatus({
         ...payload,
         checked_at: savedCheckup.checked_at,
@@ -2409,7 +2458,7 @@ async function submitCheckup(event) {
       });
     }
     updateTemperatureDisplay();
-    if (!guestMode && currentProfile?.role !== "employee") setActiveStep(1);
+    if (!guestMode && !isEmployeeAccount()) setActiveStep(1);
     showToast(submissionStatusError
       ? `Checkup berhasil disimpan, tetapi status batas pengisian berikutnya gagal diperiksa: ${submissionStatusError.message}`
       : "Checkup berhasil disimpan.", Boolean(submissionStatusError));
@@ -2443,7 +2492,7 @@ async function submitCheckup(event) {
         try {
           const dailyCheckup = guestMode
             ? await loadGuestDailyStatus()
-            : currentProfile?.role === "employee"
+            : isEmployeeAccount()
               ? await loadAuthenticatedDailyCheckup(payload.employee_id)
               : null;
           if (dailyCheckup) showDailyCheckupStatus(dailyCheckup);
@@ -2723,7 +2772,7 @@ function openSummaryFilter(filter) {
 
   fromInput.value = today;
   toInput.value = today;
-  departmentInput.value = "";
+  departmentInput.value = isDepartmentRepresentative() ? currentDepartmentId : "";
   if (filter === "today") {
     readinessInput.value = "";
   } else {
@@ -2755,7 +2804,6 @@ async function initializeApp(user) {
   signoutButton.classList.remove("hidden");
   refreshIcons();
   document.querySelectorAll("[data-tab-target]").forEach((button) => button.classList.remove("hidden"));
-  if (!isAdmin()) document.querySelector('[data-tab-target="profile"]').classList.add("hidden");
   appShell.classList.remove("guest-mode");
   document.querySelector("#checkup-whatsapp-wrap").classList.add("hidden");
   document.querySelector("#checkup-whatsapp").required = false;
@@ -2771,6 +2819,7 @@ async function initializeApp(user) {
     throw new Error("Akun belum memiliki profil akses. Hubungi administrator.");
   }
   currentProfile = data;
+  document.querySelector('[data-tab-target="profile"]').classList.toggle("hidden", !isAdmin());
   await syncAppTimezone();
   await syncWhatsAppNotificationSetting();
   await syncCheckupLocationSetting();
@@ -2780,12 +2829,21 @@ async function initializeApp(user) {
   todayReadinessCounts = null;
   activeEmployeeCount = null;
   currentEmployeeId = null;
-  if (currentProfile.role === "employee") {
+  currentDepartmentId = null;
+  if (isEmployeeAccount()) {
     const employeeResult = await client.rpc("current_employee_id");
     if (employeeResult.error) throw employeeResult.error;
     currentEmployeeId = employeeResult.data;
     if (!currentEmployeeId) {
       throw new Error("Akun belum ditautkan ke data karyawan. Hubungi administrator.");
+    }
+  }
+  if (isDepartmentRepresentative()) {
+    const departmentResult = await client.rpc("current_department_id");
+    if (departmentResult.error) throw departmentResult.error;
+    currentDepartmentId = departmentResult.data;
+    if (!currentDepartmentId) {
+      throw new Error("Akun perwakilan belum ditautkan ke departemen. Hubungi administrator.");
     }
   }
   loginScreen.classList.add("hidden");
@@ -2795,14 +2853,14 @@ async function initializeApp(user) {
     timeZone: getActiveTimezone(),
     weekday: "long", day: "numeric", month: "long", year: "numeric"
   }).format(new Date());
-  document.querySelector("#history-department-wrap").classList.toggle("hidden", !isAdmin());
-  document.querySelector("#daily-coverage-card").classList.toggle("hidden", !isAdmin());
+  document.querySelector("#history-department-wrap").classList.toggle("hidden", !isAdmin() && !isDepartmentRepresentative());
+  document.querySelector("#daily-coverage-card").classList.toggle("hidden", !isSummaryViewer());
 
   await loadDepartments();
   await loadEmployees();
   if (isAdmin()) restoreCheckupSelection();
   await loadCheckups();
-  if (currentProfile.role === "employee") {
+  if (isEmployeeAccount()) {
     const dailyCheckup = await loadAuthenticatedDailyCheckup(currentEmployeeId);
     if (dailyCheckup) {
       showDailyCheckupStatus(dailyCheckup);
@@ -2817,7 +2875,7 @@ async function initializeApp(user) {
     checkupProgress.classList.remove("hidden");
     resultCard.classList.add("hidden");
   }
-  setTab(isAdmin() ? "summary" : "checkup", false);
+  setTab(isSummaryViewer() ? "summary" : "checkup", false);
   if (realtimeChannel) await client.removeChannel(realtimeChannel);
   realtimeChannel = client
     .channel("checkup-changes")
@@ -2835,7 +2893,7 @@ async function initializeApp(user) {
     })
     .on("postgres_changes", { event: "*", schema: "public", table: "employees" }, () => {
       loadEmployees().then(async () => {
-        if (isAdmin()) {
+        if (isSummaryViewer()) {
           await loadDailyCoverage();
           renderSummary();
         }
@@ -2886,6 +2944,7 @@ async function initializeGuestApp() {
   currentUser = null;
   currentProfile = null;
   currentEmployeeId = null;
+  currentDepartmentId = null;
   resetCheckupResponses();
   todayCheckupCount = null;
   todayReadinessCounts = null;
@@ -2904,6 +2963,11 @@ async function initializeGuestApp() {
   resultCard.classList.add("hidden");
   checkupForm.classList.remove("hidden");
   checkupProgress.classList.remove("hidden");
+  document.querySelector("#checkup-identity-controls").classList.remove("hidden");
+  document.querySelector("#checkup-identity-summary").classList.add("hidden");
+  document.querySelector("#checkup-identity-summary").classList.remove("flex");
+  document.querySelector("#edit-checkup-identity").classList.remove("hidden");
+  document.querySelector("#history-department").disabled = false;
   departmentSelect.disabled = false;
   employeeSelect.disabled = false;
   departmentSelect.value = "";
@@ -3008,6 +3072,7 @@ async function handleSignOut() {
   currentUser = null;
   currentProfile = null;
   currentEmployeeId = null;
+  currentDepartmentId = null;
   guestMode = false;
   departments = [];
   employees = [];
@@ -3329,7 +3394,7 @@ function bindEvents() {
       // 4. Tutup modal & segarkan tampilan riwayat serta ringkasan
       exportConfirmModal.close();
       await loadCheckups();
-      if (isAdmin()) await loadDailyCoverage();
+      if (isSummaryViewer()) await loadDailyCoverage();
 
       showToast(`File CSV berhasil diunduh dan ${deletedCount} riwayat berhasil dihapus.`);
     } catch (error) {
