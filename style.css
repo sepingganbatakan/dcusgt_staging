@@ -396,6 +396,14 @@ button {
   grid-template-columns: repeat(2, 1fr);
 }
 
+.bottom-nav.has-admin-profile {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.bottom-nav.has-admin-settings {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .nav-item {
   display: flex;
   min-height: 49px;
@@ -445,6 +453,10 @@ button {
 .summary-filter-card:focus-visible {
   outline: 2px solid #2563eb;
   outline-offset: 2px;
+}
+
+.summary-filter-card:disabled {
+  cursor: wait;
 }
 
 .daily-coverage-card {
