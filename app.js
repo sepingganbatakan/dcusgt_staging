@@ -41,7 +41,6 @@ const missingDcuModal = document.querySelector("#missing-dcu-modal");
 const historyList = document.querySelector("#history-list");
 const offlineQueueBadge = document.querySelector("#offline-queue-badge");
 const syncIcon = document.querySelector("#sync-icon");
-const syncText = document.querySelector("#sync-text");
 const queueCountBadge = document.querySelector("#queue-count");
 const manualSyncButton = document.querySelector("#manual-sync-button");
 const queueModal = document.querySelector("#queue-modal");
@@ -2009,16 +2008,19 @@ async function updateNetworkAndQueueUI() {
   offlineQueueBadge.classList.remove("hidden");
   if (!isOnline) {
     offlineQueueBadge.className = "sync-badge is-offline";
-    syncIcon.innerHTML = '<i data-lucide="wifi-off" class="h-3.5 w-3.5 text-amber-700"></i>';
-    syncText.textContent = "Offline";
+    syncIcon.innerHTML = '<i data-lucide="wifi-off" class="text-amber-700"></i>';
+    offlineQueueBadge.setAttribute("aria-label", "Status koneksi: Offline");
+    offlineQueueBadge.title = "Status koneksi: Offline";
   } else if (isSyncing) {
     offlineQueueBadge.className = "sync-badge is-syncing";
-    syncIcon.innerHTML = '<i data-lucide="refresh-cw" class="h-3.5 w-3.5 text-blue-600 animate-spin"></i>';
-    syncText.textContent = "Menyinkronkan…";
+    syncIcon.innerHTML = '<i data-lucide="refresh-cw" class="text-blue-600 animate-spin"></i>';
+    offlineQueueBadge.setAttribute("aria-label", "Sedang menyinkronkan antrean");
+    offlineQueueBadge.title = "Sedang menyinkronkan antrean";
   } else {
     offlineQueueBadge.className = "sync-badge";
-    syncIcon.innerHTML = '<i data-lucide="wifi" class="h-3.5 w-3.5 text-emerald-600"></i>';
-    syncText.textContent = "Online";
+    syncIcon.innerHTML = '<i data-lucide="wifi" class="text-emerald-600"></i>';
+    offlineQueueBadge.setAttribute("aria-label", "Status koneksi: Online");
+    offlineQueueBadge.title = "Status koneksi: Online";
   }
 
   if (pendingCount > 0) {
@@ -3334,7 +3336,6 @@ async function initializeApp(user) {
   adminHrMenuVisibility = { profile: true, checkup: true };
   adminHrMenuVisibilityLoaded = false;
   linkedAccountEmployeeId = null;
-  document.querySelector("#change-password-button").classList.remove("hidden");
   const signoutButton = document.querySelector("#signout-button");
   signoutButton.innerHTML = '<i data-lucide="log-out"></i>';
   signoutButton.setAttribute("aria-label", "Keluar");
@@ -3357,6 +3358,7 @@ async function initializeApp(user) {
     throw new Error("Akun belum memiliki profil akses. Hubungi administrator.");
   }
   currentProfile = data;
+  document.querySelector("#change-password-button").classList.remove("hidden");
   if (isAdmin()) await loadAdminHrMenuVisibility();
   document.querySelector("#admin-settings-form").classList.toggle("hidden", currentProfile.role !== "admin");
   await syncAppTimezone();
@@ -3595,6 +3597,7 @@ async function initializeGuestApp() {
 
 async function showLogin() {
   appShell.classList.add("hidden");
+  document.querySelector("#change-password-button").classList.add("hidden");
   loggedInIdentity.textContent = "";
   loggedInIdentity.classList.add("hidden");
   loginScreen.classList.remove("hidden");
