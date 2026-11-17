@@ -2126,6 +2126,13 @@ function renderHistory() {
 }
 
 function renderSummary() {
+  const departmentLabel = document.querySelector("#stat-active-department");
+  const departmentName = departments.find((department) => department.id === currentDepartmentId)?.name;
+  departmentLabel.textContent = isDepartmentRepresentative() && departmentName
+    ? ` — ${departmentName}`
+    : "";
+  departmentLabel.classList.toggle("hidden", !isDepartmentRepresentative() || !departmentName);
+
   const counts = isSummaryViewer() && todayReadinessCounts
     ? {
         fit: todayReadinessCounts.fit_to_work,
