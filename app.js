@@ -85,6 +85,9 @@ let activeTimezone = (typeof APP_TIMEZONE === "string" && APP_TIMEZONE.trim())
   : "Asia/Jakarta";
 let waNotificationsEnabled = false;
 let checkupLocationEnabled = false;
+let measurementProviderEnabled = false;
+let measurementProviderNames = [];
+let checkupPageCount = 3;
 let employeeDisplayLimit = (typeof DEFAULT_EMPLOYEE_DISPLAY_LIMIT === "number" && DEFAULT_EMPLOYEE_DISPLAY_LIMIT > 0)
   ? DEFAULT_EMPLOYEE_DISPLAY_LIMIT
   : 4;
@@ -131,6 +134,109 @@ async function syncWhatsAppNotificationSetting() {
 function applyCheckupLocationSettingUI() {
   document.querySelector("#checkup-location-notice")
     ?.classList.toggle("hidden", !checkupLocationEnabled);
+}
+
+function getLastCheckupStep() {
+  if (checkupPageCount === 1) return 2;
+  if (checkupPageCount === 2 || !measurementProviderEnabled) return 3;
+  return 4;
+}
+
+function applyCheckupPageLayoutUI() {
+  const physicalStep = document.querySelector("#checkup-physical-step");
+  const symptomsStep = document.querySelector("#checkup-symptoms-step");
+  const providerStep = document.querySelector("#measurement-provider-step");
+  const providerSelect = document.querySelector("#measurement-provider");
+  const providerEmptyNotice = document.querySelector("#measurement-provider-empty");
+  const stepThreeNextButton = document.querySelector("#checkup-step3-next");
+  const stepThreeSubmitButton = document.querySelector("#submit-checkup");
+  const physicalNavigation = document.querySelector("#checkup-step2-navigation");
+  const physicalPreviousButton = document.querySelector("#checkup-step2-prev");
+  const symptomsNavigation = document.querySelector("#checkup-step3-navigation");
+  const symptomsPreviousButton = document.querySelector("#checkup-step3-prev");
+  const providerAnchor = document.querySelector("#measurement-provider-step-anchor");
+  const providerNavigation = document.querySelector("#measurement-provider-navigation");
+  const providerPreviousButton = document.querySelector("#measurement-provider-prev");
+
+  if (
+    !physicalStep || !symptomsStep || !providerStep || !providerSelect
+    || !stepThreeNextButton || !stepThreeSubmitButton || !physicalNavigation
+    || !physicalPreviousButton
+    || !symptomsNavigation || !symptomsPreviousButton || !providerAnchor
+    || !providerNavigation || !providerPreviousButton
+  ) return;
+
+  const selectedProvider = providerSelect.value;
+  providerSelect.replaceChildren(new Option("Pilih tenaga medis", ""));
+  for (const name of measurementProviderNames) {
+    providerSelect.add(new Option(name, name));
+  }
+  providerSelect.value = measurementProviderNames.includes(selectedProvider) ? selectedProvider : "";
+  symptomsStep.dataset.step = checkupPageCount === 1 ? "2" : "3";
+  providerStep.dataset.step = checkupPageCount === 1 || checkupPageCount === 2
+    ? String(checkupPageCount === 1 ? 2 : 3)
+    : "4";
+  if (checkupPageCount < 3) {
+    symptomsStep.insertBefore(providerStep, symptomsNavigation);
+  } else {
+    providerAnchor.after(providerStep);
+  }
+  providerStep.classList.toggle("hidden", !measurementProviderEnabled);
+  providerEmptyNotice?.classList.toggle("hidden", measurementProviderNames.length > 0);
+  physicalNavigation.classList.toggle("hidden", checkupPageCount === 1);
+  physicalPreviousButton.classList.add("hidden");
+  physicalNavigation.classList.toggle("grid-cols-1", true);
+  physicalNavigation.classList.toggle("grid-cols-2", false);
+  symptomsPreviousButton.classList.toggle("hidden", checkupPageCount === 1);
+  stepThreeNextButton.classList.toggle("hidden", !measurementProviderEnabled || checkupPageCount !== 3);
+  stepThreeSubmitButton.classList.toggle("hidden", measurementProviderEnabled && checkupPageCount === 3);
+  symptomsNavigation.classList.toggle("grid-cols-1", checkupPageCount === 1);
+  symptomsNavigation.classList.toggle("grid-cols-2", checkupPageCount !== 1);
+  providerNavigation.classList.toggle("hidden", checkupPageCount !== 3);
+  providerPreviousButton.classList.toggle("hidden", checkupPageCount !== 3);
+  providerNavigation.classList.toggle("grid-cols-1", false);
+  providerNavigation.classList.toggle("grid-cols-2", true);
+  if (activeStep > getLastCheckupStep()) setActiveStep(getLastCheckupStep());
+  else setActiveStep(activeStep);
+}
+
+async function syncCheckupPageCountSetting() {
+  if (!client) return;
+  try {
+    const { data, error } = await client.rpc("get_dcu_page_count");
+    if (error) throw error;
+    if (![1, 2, 3].includes(data)) {
+      throw new Error("Supabase mengembalikan jumlah halaman DCU yang tidak valid.");
+    }
+    checkupPageCount = data;
+  } catch (error) {
+    console.warn("Could not sync DCU page count; using the default layout:", error);
+    checkupPageCount = 3;
+  }
+  applyCheckupPageLayoutUI();
+}
+
+async function syncMeasurementProviderSetting() {
+  if (!client) return;
+  try {
+    const { data, error } = await client.rpc("get_measurement_provider_settings");
+    if (error) throw error;
+    if (
+      !data
+      || typeof data.enabled !== "boolean"
+      || !Array.isArray(data.names)
+      || data.names.some((name) => typeof name !== "string")
+    ) {
+      throw new Error("Supabase mengembalikan konfigurasi tenaga medis dengan format yang tidak valid.");
+    }
+    measurementProviderEnabled = data.enabled;
+    measurementProviderNames = [...new Set(data.names.map((name) => name.trim()).filter(Boolean))];
+  } catch (error) {
+    console.warn("Could not sync measurement provider settings; hiding the provider step:", error);
+    measurementProviderEnabled = false;
+    measurementProviderNames = [];
+  }
+  applyCheckupPageLayoutUI();
 }
 
 async function syncCheckupLocationSetting() {
@@ -314,7 +420,7 @@ function renderAdminSettings(settings) {
           if (typeof setting.max === "number") input.max = String(setting.max);
         }
       }
-      input.required = true;
+      input.required = setting.required !== false;
       card.append(label, input);
     }
 
@@ -392,6 +498,12 @@ async function handleAdminSettingsSave(event) {
       }
       if (Object.hasOwn(values, "checkup_location_enabled")) {
         await syncCheckupLocationSetting();
+      }
+      if (Object.hasOwn(values, "measurement_provider_enabled") || Object.hasOwn(values, "measurement_provider_names")) {
+        await syncMeasurementProviderSetting();
+      }
+      if (Object.hasOwn(values, "dcu_page_count")) {
+        await syncCheckupPageCountSetting();
       }
     } catch (error) {
       console.error("Saved settings but runtime refresh failed:", error);
@@ -772,6 +884,7 @@ function resetCheckupResponses() {
   document.querySelector("#diastolic").value = "";
   document.querySelector("#temperature").value = "36.5";
   document.querySelector("#notes").value = "";
+  document.querySelector("#measurement-provider").value = "";
   checkupForm.querySelectorAll('input[name="fatigue_level"], input[name="sleep_quality"], input[name="symptoms"], input[name="has_complaint_today"]')
     .forEach((input) => { input.checked = false; });
   updateComplaintSymptomsVisibility();
@@ -846,6 +959,7 @@ function saveCheckupDraft() {
     hasComplaintToday: document.querySelector("#has-complaint-today").checked ? "yes" : "no",
     symptoms,
     notes: document.querySelector("#notes").value,
+    measurementProvider: document.querySelector("#measurement-provider").value,
     step: activeStep
   };
   try {
@@ -857,7 +971,7 @@ function saveCheckupDraft() {
 }
 
 function isCheckupDraftField(target) {
-  return ["systolic", "diastolic", "temperature", "notes"].includes(target?.id)
+  return ["systolic", "diastolic", "temperature", "notes", "measurement-provider"].includes(target?.id)
     || ["fatigue_level", "sleep_quality", "symptoms", "has_complaint_today"].includes(target?.name);
 }
 
@@ -903,8 +1017,12 @@ function restoreCheckupDraft(employeeId) {
   document.querySelector("#has-complaint-today").checked = draft.hasComplaintToday === "yes";
   updateComplaintSymptomsVisibility();
   document.querySelector("#notes").value = typeof draft.notes === "string" ? draft.notes : "";
+  const measurementProvider = typeof draft.measurementProvider === "string" ? draft.measurementProvider : "";
+  document.querySelector("#measurement-provider").value = measurementProviderNames.includes(measurementProvider)
+    ? measurementProvider
+    : "";
   updateTemperatureDisplay();
-  setActiveStep(Number.isInteger(draft.step) && draft.step >= 1 && draft.step <= 3 ? draft.step : 2);
+  setActiveStep(Number.isInteger(draft.step) && draft.step >= 1 && draft.step <= getLastCheckupStep() ? draft.step : 2);
   return true;
 }
 
@@ -1207,7 +1325,7 @@ async function loadAuthenticatedDailyCheckup(employeeId) {
   const { start, end } = getDateRange();
   const { data, error } = await client
     .from("checkups")
-    .select("id, employee_id, checked_at, systolic, diastolic, temperature_c, fatigue_level, sleep_quality, symptoms, notes, readiness_status")
+    .select("id, employee_id, checked_at, systolic, diastolic, temperature_c, fatigue_level, sleep_quality, symptoms, notes, measurement_provider, readiness_status")
     .eq("employee_id", employeeId)
     .gte("checked_at", start)
     .lt("checked_at", end)
@@ -1369,13 +1487,15 @@ function formatDate(value, includeTime = true) {
 }
 
 function setActiveStep(step) {
+  step = Math.min(step, getLastCheckupStep());
   if (guestMode && step === 1) step = 2;
   activeStep = step;
   document.querySelectorAll(".checkup-step").forEach((section) => {
     section.classList.toggle("hidden", Number(section.dataset.step) !== step);
   });
-  const displayStep = guestMode ? step - 1 : step;
-  const totalSteps = guestMode ? 2 : 3;
+  const displayStep = step - 1;
+  const totalSteps = getLastCheckupStep() - 1;
+  checkupProgress.classList.toggle("hidden", !guestMode && step === 1);
   const percent = Math.round((displayStep / totalSteps) * 100);
   document.querySelector("#step-caption").textContent = `LANGKAH ${displayStep} DARI ${totalSteps}`;
   document.querySelector("#step-percent").textContent = `${percent}%`;
@@ -2154,6 +2274,7 @@ async function syncOfflineQueue(showToastNotice = false) {
           p_sleep_quality: item.payload.sleep_quality,
           p_symptoms: item.payload.symptoms,
           p_notes: item.payload.notes,
+          p_measurement_provider: item.payload.measurement_provider ?? null,
           p_location_latitude: item.payload.location_latitude ?? null,
           p_location_longitude: item.payload.location_longitude ?? null,
           p_location_accuracy_m: item.payload.location_accuracy_m ?? null,
@@ -2377,7 +2498,7 @@ async function loadCheckups() {
   historyList.innerHTML = '<div class="empty-state">Memuat riwayat…</div>';
   let query = client
     .from("checkups")
-    .select("id, employee_id, checked_at, systolic, diastolic, temperature_c, fatigue_level, sleep_quality, symptoms, notes, readiness_status, location_latitude, location_longitude, location_accuracy_m, location_captured_at, employees!inner(full_name, department_id, departments(name))")
+    .select("id, employee_id, checked_at, systolic, diastolic, temperature_c, fatigue_level, sleep_quality, symptoms, notes, measurement_provider, readiness_status, location_latitude, location_longitude, location_accuracy_m, location_captured_at, employees!inner(full_name, department_id, departments(name))")
     .order("checked_at", { ascending: false })
     .limit(1000);
 
@@ -2527,6 +2648,7 @@ function renderHistory() {
         <p><span class="block text-slate-400">Kelelahan / tidur</span><b class="mt-1 block text-slate-700">${checkup.fatigue_level} / ${checkup.sleep_quality}</b></p>
       </div>
       ${symptoms.length ? `<p class="mt-3 text-xs leading-5 text-slate-500"><b class="text-slate-600">Gejala:</b> ${escapeHtml(symptoms.join(", "))}</p>` : ""}
+      ${checkup.measurement_provider ? `<p class="mt-2 text-xs leading-5 text-slate-500"><b class="text-slate-600">Tenaga medis:</b> ${escapeHtml(checkup.measurement_provider)}</p>` : ""}
       ${checkup.notes ? `<p class="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-slate-500">${escapeHtml(checkup.notes)}</p>` : ""}
       ${locationDetails}
     </article>`;
@@ -2641,7 +2763,10 @@ function collectCheckup() {
     fatigue_level: Number(checkupForm.querySelector('input[name="fatigue_level"]:checked')?.value),
     sleep_quality: Number(checkupForm.querySelector('input[name="sleep_quality"]:checked')?.value),
     symptoms,
-    notes: document.querySelector("#notes").value.trim() || null
+    notes: document.querySelector("#notes").value.trim() || null,
+    measurement_provider: measurementProviderEnabled
+      ? document.querySelector("#measurement-provider").value.trim() || null
+      : null
   };
 }
 
@@ -2660,6 +2785,7 @@ function reportText(payload, status, checkedAt, employeeName, departmentName) {
     `Kelelahan: ${payload.fatigue_level}/5`,
     `Kualitas tidur: ${payload.sleep_quality}/5`,
     `Gejala: ${symptomNames.length ? symptomNames.join(", ") : "Tidak ada yang dipilih"}`,
+    payload.measurement_provider ? `Tenaga medis: ${payload.measurement_provider}` : "",
     payload.notes ? `Catatan: ${payload.notes}` : "",
     "_Hasil ini bukan diagnosis medis._"
   ].filter(Boolean).join("\n");
@@ -2771,7 +2897,8 @@ async function submitCheckup(event) {
   if (!confirmed) return;
 
   const payload = collectCheckup();
-  const button = document.querySelector("#submit-checkup");
+  const button = event.submitter
+    ?? document.querySelector(measurementProviderEnabled ? "#submit-checkup-final" : "#submit-checkup");
   setBusy(button, true, "Menyimpan…");
 
   if (checkupLocationEnabled) {
@@ -2870,6 +2997,7 @@ async function submitCheckup(event) {
         p_sleep_quality: payload.sleep_quality,
         p_symptoms: payload.symptoms,
         p_notes: payload.notes,
+        p_measurement_provider: payload.measurement_provider,
         p_location_latitude: payload.location_latitude ?? null,
         p_location_longitude: payload.location_longitude ?? null,
         p_location_accuracy_m: payload.location_accuracy_m ?? null,
@@ -3178,7 +3306,7 @@ function triggerCsvDownload(items) {
   if (!items?.length) return false;
   const header = [
     "Waktu checkup", "Nama karyawan", "Departemen", "Tekanan sistolik", "Tekanan diastolik",
-    "Suhu (C)", "Kelelahan (1-5)", "Kualitas tidur (1-5)", "Gejala", "Catatan", "Status",
+    "Suhu (C)", "Kelelahan (1-5)", "Kualitas tidur (1-5)", "Gejala", "Tenaga medis", "Catatan", "Status",
     "Latitude", "Longitude", "Akurasi lokasi (m)", "Waktu pengambilan lokasi"
   ];
   const rows = items.map((item) => [
@@ -3191,6 +3319,7 @@ function triggerCsvDownload(items) {
     item.fatigue_level,
     item.sleep_quality,
     Object.entries(item.symptoms ?? {}).filter(([, selected]) => selected).map(([key]) => symptomLabels[key] ?? key).join("; "),
+    item.measurement_provider,
     item.notes,
     statusDetails[item.readiness_status]?.label ?? item.readiness_status,
     item.location_latitude,
@@ -3364,6 +3493,8 @@ async function initializeApp(user) {
   await syncAppTimezone();
   await syncWhatsAppNotificationSetting();
   await syncCheckupLocationSetting();
+  await syncMeasurementProviderSetting();
+  await syncCheckupPageCountSetting();
   await syncEmployeeDisplayLimit();
   resetCheckupResponses();
   todayCheckupCount = null;
@@ -3481,6 +3612,8 @@ async function initializeGuestApp() {
     await syncWhatsAppNotificationSetting();
     await syncAppTimezone();
     await syncCheckupLocationSetting();
+    await syncMeasurementProviderSetting();
+    await syncCheckupPageCountSetting();
     await syncEmployeeDisplayLimit();
 
     guestEmployeeCreationEnabled = false;
@@ -3687,7 +3820,7 @@ function bindEvents() {
   document.querySelectorAll("[data-next]").forEach((button) => {
     button.addEventListener("click", () => {
       if (validateStep(activeStep)) {
-        setActiveStep(Math.min(3, activeStep + 1));
+        setActiveStep(Math.min(getLastCheckupStep(), activeStep + 1));
         saveCheckupDraft();
       }
     });
@@ -4049,6 +4182,8 @@ async function boot() {
   }
   await syncAppTimezone();
   await syncCheckupLocationSetting();
+  await syncMeasurementProviderSetting();
+  await syncCheckupPageCountSetting();
   await syncEmployeeDisplayLimit();
 
   client.auth.onAuthStateChange((_event, session) => {
