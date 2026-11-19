@@ -372,6 +372,10 @@ button {
   border-bottom: 0;
 }
 
+.complaint-options .symptom-row:last-child {
+  border-bottom: 1px solid #e8edf3;
+}
+
 .fit-symptom-row {
   min-height: 72px;
   background: #f0fdf4;
