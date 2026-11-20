@@ -46,6 +46,8 @@ const queueCountBadge = document.querySelector("#queue-count");
 const manualSyncButton = document.querySelector("#manual-sync-button");
 const queueModal = document.querySelector("#queue-modal");
 const adminSettingsFields = document.querySelector("#admin-settings-fields");
+const hrSettingsFields = document.querySelector("#hr-settings-fields");
+const hrSettingsPermissions = document.querySelector("#hr-settings-permissions");
 const closeQueueModalBtn = document.querySelector("#close-queue-modal");
 const closeQueueBtn = document.querySelector("#close-queue-btn");
 const triggerSyncBtn = document.querySelector("#trigger-sync-btn");
@@ -62,6 +64,10 @@ let currentUser;
 let currentProfile;
 let adminSettings = [];
 let adminSettingsLoaded = false;
+let hrSettingsAccessConfig = { enabled: false, allowed_settings: [] };
+let hrSettingsAccessConfigLoaded = false;
+let hrSettings = [];
+let hrSettingsLoaded = false;
 let adminHrMenuVisibility = { profile: true, checkup: true };
 let adminHrMenuVisibilityLoaded = false;
 let hrEmployeeCreationEnabled = false;
@@ -519,20 +525,20 @@ function showToast(message, isError = false) {
   toastTimeout = window.setTimeout(() => toastElement.classList.remove("visible"), 3500);
 }
 
-function renderAdminSettings(settings) {
-  adminSettingsFields.replaceChildren();
+function renderSettingsFields(container, settings) {
+  container.replaceChildren();
   if (settings.length === 0) {
     const emptyMessage = document.createElement("p");
     emptyMessage.className = "panel-card text-sm text-slate-500";
     emptyMessage.textContent = "Belum ada pengaturan yang tersedia. Pastikan migrasi konfigurasi terkait sudah dijalankan.";
-    adminSettingsFields.append(emptyMessage);
+    container.append(emptyMessage);
     return;
   }
 
   for (const setting of settings) {
     const card = document.createElement("div");
     card.className = "panel-card";
-    const inputId = `admin-setting-${setting.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+    const inputId = `${container.id}-setting-${setting.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
     const input = setting.type === "textarea"
       ? document.createElement("textarea")
       : setting.type === "select"
@@ -596,7 +602,7 @@ function renderAdminSettings(settings) {
       card.append(label, input);
     }
 
-    adminSettingsFields.append(card);
+    container.append(card);
   }
   refreshIcons();
 }
@@ -625,7 +631,8 @@ async function loadAdminSettings(forceReload = false) {
   }
   adminSettings = data;
   adminSettingsLoaded = true;
-  renderAdminSettings(adminSettings);
+  renderSettingsFields(adminSettingsFields, adminSettings);
+  if (hrSettingsAccessConfigLoaded) renderHrSettingsAccessConfig();
 }
 
 async function handleAdminSettingsSave(event) {
@@ -657,37 +664,7 @@ async function handleAdminSettingsSave(event) {
     showToast("Pengaturan berhasil disimpan.");
 
     try {
-      if (Object.hasOwn(values, "app_timezone")) {
-        await syncAppTimezone();
-        document.querySelector("#today-label").textContent = new Intl.DateTimeFormat("id-ID", {
-          timeZone: getActiveTimezone(),
-          weekday: "long", day: "numeric", month: "long", year: "numeric"
-        }).format(new Date());
-        await loadCheckups();
-      }
-      if (Object.hasOwn(values, "wa_notifications_enabled")) {
-        await syncWhatsAppNotificationSetting();
-      }
-      if (Object.hasOwn(values, "checkup_location_enabled")) {
-        await syncCheckupLocationSetting();
-      }
-      if (Object.hasOwn(values, "measurement_provider_enabled") || Object.hasOwn(values, "measurement_provider_names")) {
-        await syncMeasurementProviderSetting();
-      }
-      if (Object.hasOwn(values, "dcu_page_count")) {
-        await syncCheckupPageCountSetting();
-      }
-      if ([
-        "dcu_substance_questions_enabled",
-        "dcu_substance_questions_departments",
-        "dcu_substance_questions_job_titles"
-      ].some((key) => Object.hasOwn(values, key))) {
-        if (!await syncSubstanceQuestionSettings()) {
-          throw new Error("Pengaturan pertanyaan konsumsi tersimpan, tetapi konfigurasi aktif gagal dimuat.");
-        }
-        renderEmployeeList(currentCheckupTab);
-        updateSubstanceQuestionVisibility();
-      }
+      await refreshRuntimeAfterSettingsSave(values);
     } catch (error) {
       console.error("Saved settings but runtime refresh failed:", error);
       showToast(`Pengaturan tersimpan, tetapi tampilan gagal diperbarui: ${error.message}`, true);
@@ -695,6 +672,211 @@ async function handleAdminSettingsSave(event) {
   } catch (error) {
     console.error("Admin settings save failed:", error);
     showToast(`Gagal menyimpan pengaturan: ${error.message}`, true);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function refreshRuntimeAfterSettingsSave(values) {
+  if (Object.hasOwn(values, "app_timezone")) {
+    await syncAppTimezone();
+    document.querySelector("#today-label").textContent = new Intl.DateTimeFormat("id-ID", {
+      timeZone: getActiveTimezone(),
+      weekday: "long", day: "numeric", month: "long", year: "numeric"
+    }).format(new Date());
+    await loadCheckups();
+  }
+  if (Object.hasOwn(values, "wa_notifications_enabled")) {
+    await syncWhatsAppNotificationSetting();
+  }
+  if (Object.hasOwn(values, "checkup_location_enabled")) {
+    await syncCheckupLocationSetting();
+  }
+  if (Object.hasOwn(values, "measurement_provider_enabled") || Object.hasOwn(values, "measurement_provider_names")) {
+    await syncMeasurementProviderSetting();
+  }
+  if (Object.hasOwn(values, "dcu_page_count")) {
+    await syncCheckupPageCountSetting();
+  }
+  if ([
+    "dcu_substance_questions_enabled",
+    "dcu_substance_questions_departments",
+    "dcu_substance_questions_job_titles"
+  ].some((key) => Object.hasOwn(values, key))) {
+    if (!await syncSubstanceQuestionSettings()) {
+      throw new Error("Pengaturan pertanyaan konsumsi tersimpan, tetapi konfigurasi aktif gagal dimuat.");
+    }
+    renderEmployeeList(currentCheckupTab);
+    updateSubstanceQuestionVisibility();
+  }
+}
+
+function renderHrSettingsAccessConfig() {
+  document.querySelector("#hr-settings-enabled").checked = hrSettingsAccessConfig.enabled;
+  hrSettingsPermissions.replaceChildren();
+
+  if (adminSettings.length === 0) {
+    const emptyMessage = document.createElement("p");
+    emptyMessage.className = "text-sm text-slate-500";
+    emptyMessage.textContent = "Tidak ada pengaturan tersedia untuk dipilih.";
+    hrSettingsPermissions.append(emptyMessage);
+    return;
+  }
+
+  for (const setting of adminSettings) {
+    const row = document.createElement("label");
+    row.className = "flex items-start gap-3 text-sm text-slate-700";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.className = "toggle-input mt-0.5";
+    input.dataset.hrSettingKey = setting.key;
+    input.checked = hrSettingsAccessConfig.allowed_settings.includes(setting.key);
+    const label = document.createElement("span");
+    label.textContent = setting.label;
+    row.append(input, label);
+    hrSettingsPermissions.append(row);
+  }
+}
+
+async function loadHrSettingsAccessConfig(forceReload = false) {
+  if (!isAdmin()) {
+    throw new Error("Hanya admin atau HR yang dapat membaca konfigurasi pengaturan HR.");
+  }
+  if (hrSettingsAccessConfigLoaded && !forceReload) return;
+
+  const { data, error } = await client.rpc("get_hr_settings_access_config");
+  if (error) {
+    hrSettingsAccessConfigLoaded = false;
+    throw error;
+  }
+  if (
+    !data
+    || typeof data.enabled !== "boolean"
+    || !Array.isArray(data.allowed_settings)
+    || data.allowed_settings.some((key) => typeof key !== "string")
+  ) {
+    hrSettingsAccessConfigLoaded = false;
+    throw new Error("Supabase mengembalikan konfigurasi akses pengaturan HR dengan format yang tidak valid.");
+  }
+
+  hrSettingsAccessConfig = {
+    enabled: data.enabled,
+    allowed_settings: [...new Set(data.allowed_settings)]
+  };
+  hrSettingsAccessConfigLoaded = true;
+  if (currentProfile?.role === "admin" && adminSettingsLoaded) renderHrSettingsAccessConfig();
+  applyRoleMenuVisibility();
+}
+
+async function loadHrSettings(forceReload = false) {
+  if (currentProfile?.role !== "hr") {
+    throw new Error("Hanya HR yang dapat mengakses pengaturan HR.");
+  }
+  if (!hrSettingsAccessConfigLoaded || forceReload) {
+    await loadHrSettingsAccessConfig(forceReload);
+  }
+  if (!hrSettingsAccessConfig.enabled) {
+    throw new Error("Akses menu Pengaturan untuk HR sedang dinonaktifkan.");
+  }
+  if (hrSettingsLoaded && !forceReload) return;
+
+  hrSettingsFields.replaceChildren();
+  const loadingMessage = document.createElement("p");
+  loadingMessage.className = "panel-card text-sm text-slate-500";
+  loadingMessage.textContent = "Memuat pengaturan…";
+  hrSettingsFields.append(loadingMessage);
+
+  const { data, error } = await client.rpc("get_hr_editable_settings");
+  if (error) {
+    hrSettingsLoaded = false;
+    document.querySelector("#save-hr-settings").classList.add("hidden");
+    hrSettingsFields.textContent = `Pengaturan gagal dimuat: ${error.message}`;
+    throw error;
+  }
+  if (!Array.isArray(data)) {
+    hrSettingsLoaded = false;
+    document.querySelector("#save-hr-settings").classList.add("hidden");
+    throw new Error("Supabase mengembalikan daftar pengaturan HR dengan format yang tidak valid.");
+  }
+
+  hrSettings = data;
+  hrSettingsLoaded = true;
+  document.querySelector("#save-hr-settings").classList.toggle("hidden", data.length === 0);
+  renderSettingsFields(hrSettingsFields, hrSettings);
+}
+
+function readSettingsFormValues(container) {
+  const values = Object.create(null);
+  for (const input of container.querySelectorAll("[data-setting-key]")) {
+    values[input.dataset.settingKey] = input.type === "checkbox"
+      ? input.checked
+      : input.type === "number"
+        ? Number(input.value)
+        : input.value;
+  }
+  return values;
+}
+
+async function handleHrSettingsSave(event) {
+  event.preventDefault();
+  if (currentProfile?.role !== "hr" || !hrSettingsAccessConfig.enabled) {
+    showToast("HR tidak diizinkan mengubah pengaturan aplikasi.", true);
+    return;
+  }
+
+  const button = document.querySelector("#save-hr-settings");
+  const values = readSettingsFormValues(hrSettingsFields);
+  setBusy(button, true, "Menyimpan…");
+  try {
+    const { error } = await client.rpc("update_hr_editable_settings", { p_values: values });
+    if (error) throw error;
+
+    hrSettings = hrSettings.map((setting) => ({
+      ...setting,
+      value: values[setting.key]
+    }));
+    showToast("Pengaturan berhasil disimpan.");
+    try {
+      await refreshRuntimeAfterSettingsSave(values);
+    } catch (error) {
+      console.error("Saved HR settings but runtime refresh failed:", error);
+      showToast(`Pengaturan tersimpan, tetapi tampilan gagal diperbarui: ${error.message}`, true);
+    }
+  } catch (error) {
+    console.error("HR settings save failed:", error);
+    showToast(`Gagal menyimpan pengaturan: ${error.message}`, true);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function handleHrSettingsAccessSave(event) {
+  event.preventDefault();
+  if (currentProfile?.role !== "admin") {
+    showToast("Hanya admin yang dapat mengubah akses pengaturan HR.", true);
+    return;
+  }
+
+  const button = document.querySelector("#save-hr-settings-access");
+  const values = {
+    enabled: document.querySelector("#hr-settings-enabled").checked,
+    allowed_settings: [...hrSettingsPermissions.querySelectorAll("[data-hr-setting-key]:checked")]
+      .map((input) => input.dataset.hrSettingKey)
+  };
+  setBusy(button, true, "Menyimpan…");
+  try {
+    const { error } = await client.rpc("update_hr_settings_access_config", { p_values: values });
+    if (error) throw error;
+
+    hrSettingsAccessConfig = values;
+    hrSettingsAccessConfigLoaded = true;
+    applyRoleMenuVisibility();
+    const activeTab = document.querySelector(".nav-item.active")?.dataset.tabTarget;
+    if (activeTab === "settings" && !values.enabled) setTab("summary", false);
+    showToast("Akses pengaturan HR berhasil disimpan.");
+  } catch (error) {
+    console.error("HR settings access save failed:", error);
+    showToast(`Gagal menyimpan akses pengaturan HR: ${error.message}`, true);
   } finally {
     setBusy(button, false);
   }
@@ -1024,17 +1206,16 @@ function applyRoleMenuVisibility() {
   const checkupButton = document.querySelector('[data-tab-target="checkup"]');
   const settingsButton = document.querySelector('[data-tab-target="settings"]');
   const bottomNav = document.querySelector(".bottom-nav");
+  const canAccessSettings = currentProfile?.role === "admin"
+    || (currentProfile?.role === "hr" && hrSettingsAccessConfig.enabled);
   profileButton.classList.toggle("hidden", !guestMode && (!isAdmin() || !adminHrMenuVisibility.profile));
   checkupButton.classList.toggle("hidden", !guestMode && isAdmin() && !isLinkedAdminHrCheckupAccount());
-  settingsButton.classList.toggle("hidden", !isAdmin());
+  settingsButton.classList.toggle("hidden", !canAccessSettings);
   bottomNav.classList.toggle(
     "has-admin-profile",
     !profileButton.classList.contains("hidden") && isAdmin()
   );
-  bottomNav.classList.toggle(
-    "has-admin-settings",
-    isAdmin()
-  );
+  bottomNav.classList.toggle("has-admin-settings", canAccessSettings);
   const visibleMenuCount = [...bottomNav.querySelectorAll(".nav-item")]
     .filter((button) => !button.classList.contains("hidden"))
     .length;
@@ -4010,7 +4191,11 @@ function setTab(tabName, refreshData = true) {
   }
   if (!guestMode && tabName === "profile" && (!isAdmin() || !adminHrMenuVisibility.profile)) return;
   if (!guestMode && tabName === "checkup" && isAdmin() && !isLinkedAdminHrCheckupAccount()) return;
-  if (tabName === "settings" && currentProfile?.role !== "admin") return;
+  if (
+    tabName === "settings"
+    && currentProfile?.role !== "admin"
+    && !(currentProfile?.role === "hr" && hrSettingsAccessConfig.enabled)
+  ) return;
   if (tabName === "summary") {
     document.querySelector("#history-readiness").value = "";
   }
@@ -4030,6 +4215,24 @@ function setTab(tabName, refreshData = true) {
       loadAdminSettings().catch((error) => {
         console.error("Admin settings load failed:", error);
         showToast(`Gagal memuat pengaturan: ${error.message}`, true);
+      });
+      loadHrSettingsAccessConfig().catch((error) => {
+        console.error("HR settings access config load failed:", error);
+        showToast(`Gagal memuat akses pengaturan HR: ${error.message}`, true);
+      });
+    } else if (currentProfile?.role === "hr") {
+      loadHrSettingsAccessConfig(true).then(() => {
+        if (!hrSettingsAccessConfig.enabled) {
+          applyRoleMenuVisibility();
+          setTab("summary", false);
+          return;
+        }
+        return loadHrSettings();
+      }).catch((error) => {
+        console.error("HR settings load failed:", error);
+        applyRoleMenuVisibility();
+        showToast(`Gagal memuat pengaturan HR: ${error.message}`, true);
+        if (!hrSettingsAccessConfig.enabled) setTab("summary", false);
       });
     }
   }
@@ -4083,6 +4286,10 @@ async function initializeApp(user) {
   loggedInIdentity.classList.toggle("hidden", !user.email);
   adminSettings = [];
   adminSettingsLoaded = false;
+  hrSettingsAccessConfig = { enabled: false, allowed_settings: [] };
+  hrSettingsAccessConfigLoaded = false;
+  hrSettings = [];
+  hrSettingsLoaded = false;
   adminHrMenuVisibility = { profile: true, checkup: true };
   adminHrMenuVisibilityLoaded = false;
   linkedAccountEmployeeId = null;
@@ -4110,12 +4317,15 @@ async function initializeApp(user) {
   currentProfile = data;
   if (currentProfile.role === "hr") {
     await loadHrEmployeeCreationSetting();
+    await loadHrSettingsAccessConfig();
   } else {
     syncEmployeeCreationButtons();
   }
   document.querySelector("#change-password-button").classList.remove("hidden");
   if (isAdmin()) await loadAdminHrMenuVisibility();
   document.querySelector("#admin-settings-form").classList.toggle("hidden", currentProfile.role !== "admin");
+  document.querySelector("#hr-settings-access-form").classList.toggle("hidden", currentProfile.role !== "admin");
+  document.querySelector("#hr-settings-form").classList.toggle("hidden", currentProfile.role !== "hr");
   document.querySelector("#menu-visibility-form").classList.toggle("hidden", currentProfile.role !== "admin");
   document.querySelector("#subdepartment-management").classList.toggle("hidden", !isAdmin());
   await syncBootstrapSettings();
@@ -4233,6 +4443,10 @@ async function initializeGuestApp() {
   guestStatusRequest += 1;
   currentProfile = null;
   hrEmployeeCreationEnabled = false;
+  hrSettingsAccessConfig = { enabled: false, allowed_settings: [] };
+  hrSettingsAccessConfigLoaded = false;
+  hrSettings = [];
+  hrSettingsLoaded = false;
   guestEmployeeCreationEnabled = false;
   currentEmployeeId = null;
   linkedAccountEmployeeId = null;
@@ -4240,6 +4454,8 @@ async function initializeGuestApp() {
   adminHrMenuVisibilityLoaded = false;
   document.querySelector(".bottom-nav").style.removeProperty("grid-template-columns");
   document.querySelector("#admin-settings-form").classList.add("hidden");
+  document.querySelector("#hr-settings-access-form").classList.add("hidden");
+  document.querySelector("#hr-settings-form").classList.add("hidden");
   document.querySelector("#menu-visibility-form").classList.add("hidden");
   document.querySelector("#subdepartment-management").classList.add("hidden");
   try {
@@ -4438,6 +4654,8 @@ function bindEvents() {
   document.querySelector("#change-password-form").addEventListener("submit", handlePasswordChange);
   document.querySelector("#admin-settings-form").addEventListener("submit", handleAdminSettingsSave);
   document.querySelector("#menu-visibility-form").addEventListener("submit", handleMenuVisibilitySave);
+  document.querySelector("#hr-settings-access-form").addEventListener("submit", handleHrSettingsAccessSave);
+  document.querySelector("#hr-settings-form").addEventListener("submit", handleHrSettingsSave);
   document.querySelector("#subdepartment-form").addEventListener("submit", saveSubdepartment);
   document.querySelector("#supervisor-form").addEventListener("submit", saveSupervisor);
   document.querySelector("#employee-subdepartment-form").addEventListener("submit", saveEmployeeSubdepartment);
