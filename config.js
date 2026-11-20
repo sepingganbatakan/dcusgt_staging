@@ -5,10 +5,6 @@ export const SUPABASE_ANON_KEY = "sb_publishable_ztMzB1j59xwz7ZP0jTvilA_1r_X4d7A
 // The Supabase guest-mode setting must also be enabled; see guest_mode.sql.
 export const ALLOW_GUEST_CHECKUPS = true;
 
-// Guests can add their name to the selected department when it is missing.
-// The Supabase guest employee-creation setting must also be enabled.
-export const ALLOW_GUEST_EMPLOYEE_CREATION = false;
-
 // Choose "tabs" or "dropdown" for department.
 // These settings apply to both checkup identity and the guest profile form.
 export const DEPARTMENT_SELECTION_MODE = "dropdown";

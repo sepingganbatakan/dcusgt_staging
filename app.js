@@ -1,6 +1,5 @@
 import {
   ALLOW_GUEST_CHECKUPS,
-  ALLOW_GUEST_EMPLOYEE_CREATION,
   APP_TIMEZONE,
   DEFAULT_EMPLOYEE_DISPLAY_LIMIT,
   DEPARTMENT_SELECTION_MODE,
@@ -65,6 +64,7 @@ let adminSettings = [];
 let adminSettingsLoaded = false;
 let adminHrMenuVisibility = { profile: true, checkup: true };
 let adminHrMenuVisibilityLoaded = false;
+let hrEmployeeCreationEnabled = false;
 let linkedAccountEmployeeId = null;
 let currentEmployeeId;
 let currentDepartmentId;
@@ -940,6 +940,51 @@ function refreshIcons(root) {
 
 function isAdmin() {
   return ["admin", "hr"].includes(currentProfile?.role);
+}
+
+function canAddAuthenticatedEmployee() {
+  return currentProfile?.role === "admin"
+    || (currentProfile?.role === "hr" && hrEmployeeCreationEnabled);
+}
+
+function canAddGuestEmployee() {
+  return guestMode && guestEmployeeCreationEnabled;
+}
+
+function syncEmployeeCreationButtons() {
+  const canAdd = canAddAuthenticatedEmployee() || canAddGuestEmployee();
+  document.querySelector("#open-employee-modal").classList.toggle("hidden", !canAdd);
+  document.querySelector("#profile-add-employee").classList.toggle("hidden", !canAdd);
+}
+
+async function loadHrEmployeeCreationSetting() {
+  if (currentProfile?.role !== "hr") {
+    hrEmployeeCreationEnabled = false;
+    syncEmployeeCreationButtons();
+    return false;
+  }
+
+  const { data, error } = await client.rpc("is_hr_employee_creation_enabled");
+  if (error) throw error;
+  if (typeof data !== "boolean") {
+    throw new Error("Supabase mengembalikan status izin penambahan karyawan HR yang tidak valid.");
+  }
+
+  hrEmployeeCreationEnabled = data;
+  syncEmployeeCreationButtons();
+  return data;
+}
+
+async function loadGuestEmployeeCreationSetting() {
+  const { data, error } = await client.rpc("is_guest_employee_creation_enabled");
+  if (error) throw error;
+  if (typeof data !== "boolean") {
+    throw new Error("Supabase mengembalikan status izin penambahan karyawan tamu yang tidak valid.");
+  }
+
+  guestEmployeeCreationEnabled = data;
+  syncEmployeeCreationButtons();
+  return data;
 }
 
 function isDepartmentRepresentative() {
@@ -2291,10 +2336,11 @@ function updateEmployeeOptions() {
     employeeSelect.innerHTML = '<option value="">Belum ada karyawan terdaftar</option>';
   }
   const addButton = document.querySelector("#open-employee-modal");
-  const canAddEmployee = isAdmin() || (guestMode && ALLOW_GUEST_EMPLOYEE_CREATION && guestEmployeeCreationEnabled);
+  const canAddEmployee = canAddAuthenticatedEmployee() || canAddGuestEmployee();
+  syncEmployeeCreationButtons();
   addButton.disabled = false;
   addButton.title = canAddEmployee ? "Tambah nama karyawan" : "Hubungi HR untuk menambahkan karyawan";
-  document.querySelector("#employee-hint").textContent = isAdmin()
+  document.querySelector("#employee-hint").textContent = canAddAuthenticatedEmployee()
     ? "Karyawan baru dapat ditambahkan oleh HR/admin."
     : guestMode && canAddEmployee
       ? "Nama belum ada? Tambahkan nama Anda sendiri."
@@ -3660,8 +3706,25 @@ async function submitCheckup(event) {
 
 async function addEmployee(event) {
   event.preventDefault();
-  const canAddAsGuest = guestMode && ALLOW_GUEST_EMPLOYEE_CREATION && guestEmployeeCreationEnabled;
-  if (!isAdmin() && !canAddAsGuest) {
+  if (currentProfile?.role === "hr" || (guestMode && navigator.onLine)) {
+    try {
+      if (currentProfile?.role === "hr") {
+        await loadHrEmployeeCreationSetting();
+      } else {
+        await loadGuestEmployeeCreationSetting();
+      }
+    } catch (error) {
+      console.error("Could not verify employee-creation permission:", error);
+      showToast(`Gagal memverifikasi izin penambahan karyawan: ${error.message}`, true);
+      return;
+    }
+  }
+  const canAddAsGuest = canAddGuestEmployee();
+  if (currentProfile?.role === "hr" && !hrEmployeeCreationEnabled) {
+    showToast("HR tidak diizinkan menambah karyawan baru.", true);
+    return;
+  }
+  if (!canAddAuthenticatedEmployee() && !canAddAsGuest) {
     showToast("Hanya HR/admin yang dapat menambah master karyawan.", true);
     return;
   }
@@ -4005,6 +4068,9 @@ async function initializeApp(user) {
   guestStatusRequest += 1;
   guestMode = false;
   guestProfile = null;
+  hrEmployeeCreationEnabled = false;
+  document.querySelector("#profile-add-employee").classList.add("hidden");
+  document.querySelector("#open-employee-modal").classList.add("hidden");
   document.querySelector("#checkup-whatsapp").value = "";
   document.querySelector("#daily-checkup-status-loading").classList.add("hidden");
   document.querySelector("#daily-checkup-completed-notice").classList.add("hidden");
@@ -4042,6 +4108,11 @@ async function initializeApp(user) {
     throw new Error("Akun belum memiliki profil akses. Hubungi administrator.");
   }
   currentProfile = data;
+  if (currentProfile.role === "hr") {
+    await loadHrEmployeeCreationSetting();
+  } else {
+    syncEmployeeCreationButtons();
+  }
   document.querySelector("#change-password-button").classList.remove("hidden");
   if (isAdmin()) await loadAdminHrMenuVisibility();
   document.querySelector("#admin-settings-form").classList.toggle("hidden", currentProfile.role !== "admin");
@@ -4161,6 +4232,8 @@ async function initializeApp(user) {
 async function initializeGuestApp() {
   guestStatusRequest += 1;
   currentProfile = null;
+  hrEmployeeCreationEnabled = false;
+  guestEmployeeCreationEnabled = false;
   currentEmployeeId = null;
   linkedAccountEmployeeId = null;
   adminHrMenuVisibility = { profile: true, checkup: true };
@@ -4171,27 +4244,32 @@ async function initializeGuestApp() {
   document.querySelector("#subdepartment-management").classList.add("hidden");
   try {
     if (!navigator.onLine) throw new Error("Offline");
-    const guestPromises = [client.rpc("is_guest_checkups_enabled")];
-    if (ALLOW_GUEST_EMPLOYEE_CREATION) {
-      guestPromises.push(client.rpc("is_guest_employee_creation_enabled"));
-    }
+    const guestPromises = [
+      client.rpc("is_guest_checkups_enabled"),
+      client.rpc("is_guest_employee_creation_enabled")
+    ];
     const results = await Promise.all(guestPromises);
     const guestCheckupRes = results[0];
+    const guestEmployeeCreationRes = results[1];
     if (guestCheckupRes.error) throw guestCheckupRes.error;
     if (!guestCheckupRes.data) {
       throw new Error("Mode tamu belum diaktifkan di Supabase. Lihat guest_mode.sql.");
     }
-    guestEmployeeCreationEnabled = Boolean(ALLOW_GUEST_EMPLOYEE_CREATION && results[1]?.data);
+    if (guestEmployeeCreationRes.error) throw guestEmployeeCreationRes.error;
+    if (typeof guestEmployeeCreationRes.data !== "boolean") {
+      throw new Error("Supabase mengembalikan status izin penambahan karyawan tamu yang tidak valid.");
+    }
+    guestEmployeeCreationEnabled = guestEmployeeCreationRes.data;
   } catch (err) {
     if (!navigator.onLine || err.message?.includes("Failed to fetch") || err.name === "TypeError" || err.message === "Offline") {
       console.warn("Inisialisasi mode tamu dalam status offline:", err);
-      guestEmployeeCreationEnabled = Boolean(ALLOW_GUEST_EMPLOYEE_CREATION);
+      guestEmployeeCreationEnabled = false;
     } else {
       throw err;
     }
   }
-
   guestMode = true;
+  syncEmployeeCreationButtons();
   document.querySelector("#daily-checkup-status-loading").classList.add("hidden");
   document.querySelector("#daily-checkup-completed-notice").classList.add("hidden");
   currentUser = null;
@@ -4250,8 +4328,6 @@ async function initializeGuestApp() {
   document.querySelector("#daily-coverage-card").classList.add("hidden");
   document.querySelector("#missing-dcu-card").classList.add("hidden");
   appShell.classList.add("guest-mode");
-  document.querySelector("#profile-add-employee").disabled =
-    !ALLOW_GUEST_EMPLOYEE_CREATION || !guestEmployeeCreationEnabled;
   document.querySelector("#checkup-whatsapp-wrap").classList.add("hidden");
   document.querySelector("#checkup-whatsapp").required = false;
   checkupForm.classList.add("hidden");
@@ -4593,9 +4669,30 @@ function bindEvents() {
     if (isCheckupDraftField(event.target)) saveCheckupDraft();
   });
   checkupForm.addEventListener("submit", submitCheckup);
-  document.querySelector("#open-employee-modal").addEventListener("click", () => {
-    const canAddAsGuest = guestMode && ALLOW_GUEST_EMPLOYEE_CREATION && guestEmployeeCreationEnabled;
-    if (!isAdmin() && !canAddAsGuest) {
+  document.querySelector("#open-employee-modal").addEventListener("click", async () => {
+    if (currentProfile?.role === "hr" || (guestMode && navigator.onLine)) {
+      try {
+        const allowed = currentProfile?.role === "hr"
+          ? await loadHrEmployeeCreationSetting()
+          : await loadGuestEmployeeCreationSetting();
+        if (!allowed) {
+          showToast(currentProfile?.role === "hr"
+            ? "HR tidak diizinkan menambah karyawan baru."
+            : "Penambahan nama belum diaktifkan.", true);
+          return;
+        }
+      } catch (error) {
+        console.error("Could not verify HR employee-creation permission:", error);
+        showToast(`Gagal memverifikasi izin penambahan karyawan: ${error.message}`, true);
+        return;
+      }
+    }
+    const canAddAsGuest = canAddGuestEmployee();
+    if (currentProfile?.role === "hr" && !hrEmployeeCreationEnabled) {
+      showToast("HR tidak diizinkan menambah karyawan baru.", true);
+      return;
+    }
+    if (!canAddAuthenticatedEmployee() && !canAddAsGuest) {
       showToast("Hubungi HR untuk menambahkan karyawan.", true);
       return;
     }
@@ -4604,9 +4701,27 @@ function bindEvents() {
       : departmentSelect.value;
     openEmployeeModal(departmentId, canAddAsGuest);
   });
-  document.querySelector("#profile-add-employee").addEventListener("click", () => {
-    if (!guestMode || !ALLOW_GUEST_EMPLOYEE_CREATION || !guestEmployeeCreationEnabled) {
-      showToast("Penambahan nama belum diaktifkan.", true);
+  document.querySelector("#profile-add-employee").addEventListener("click", async () => {
+    if (currentProfile?.role === "hr" || (guestMode && navigator.onLine)) {
+      try {
+        const allowed = currentProfile?.role === "hr"
+          ? await loadHrEmployeeCreationSetting()
+          : await loadGuestEmployeeCreationSetting();
+        if (!allowed) {
+          showToast(currentProfile?.role === "hr"
+            ? "HR tidak diizinkan menambah karyawan baru."
+            : "Penambahan nama belum diaktifkan.", true);
+          return;
+        }
+      } catch (error) {
+        console.error("Could not verify employee-creation permission:", error);
+        showToast(`Gagal memverifikasi izin penambahan karyawan: ${error.message}`, true);
+        return;
+      }
+    }
+    const canAddAsGuest = canAddGuestEmployee();
+    if (!canAddAuthenticatedEmployee() && !canAddAsGuest) {
+      showToast("Penambahan karyawan belum diizinkan.", true);
       return;
     }
     const departmentId = document.querySelector("#profile-department").value;
@@ -4614,7 +4729,9 @@ function bindEvents() {
       showToast("Pilih departemen terlebih dahulu.", true);
       return;
     }
-    openEmployeeModal(departmentId, true);
+    departmentSelect.value = departmentId;
+    updateEmployeeOptions();
+    openEmployeeModal(departmentId, canAddAsGuest);
   });
   document.querySelector("#close-employee-modal").addEventListener("click", () => employeeModal.close());
   employeeModal.addEventListener("click", (event) => {
