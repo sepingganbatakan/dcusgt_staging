@@ -126,15 +126,19 @@ function updateSleepHoursDisplay() {
     ? "rounded-lg bg-rose-50 px-2.5 py-1 text-sm font-bold text-rose-700"
     : sleepHours <= 5
       ? "rounded-lg bg-amber-50 px-2.5 py-1 text-sm font-bold text-amber-700"
-      : "rounded-lg bg-emerald-50 px-2.5 py-1 text-sm font-bold text-emerald-700";
+      : sleepHours <= 7
+        ? "rounded-lg bg-emerald-50 px-2.5 py-1 text-sm font-bold text-emerald-700"
+        : sleepHours <= 9
+          ? "rounded-lg bg-cyan-50 px-2.5 py-1 text-sm font-bold text-cyan-700"
+          : "rounded-lg bg-blue-50 px-2.5 py-1 text-sm font-bold text-blue-700";
   hint.textContent = sleepHours < 3
     ? "Kurang dari 3 jam — hentikan aktifitas dan segera istirahat."
     : sleepHours <= 5
-      ? "3–5 jam — direkomendasikan istirahat cukup."
+      ? "3 – 5 jam — direkomendasikan istirahat cukup."
       : sleepHours <= 7
-        ? "5–7 jam — lakukan istirahat berkala."
+        ? "5 – 7 jam — lakukan istirahat berkala."
         : sleepHours <= 9
-          ? "7–9 jam — dapat beraktifitas seperti biasa."
+          ? "7 – 9 jam — dapat beraktifitas seperti biasa."
           : "di atas 9 jam — sesuaikan istirahat sesuai kebutuhan.";
 }
 
