@@ -128,10 +128,14 @@ function updateSleepHoursDisplay() {
       ? "rounded-lg bg-amber-50 px-2.5 py-1 text-sm font-bold text-amber-700"
       : "rounded-lg bg-emerald-50 px-2.5 py-1 text-sm font-bold text-emerald-700";
   hint.textContent = sleepHours < 3
-    ? "Kurang dari 3 jam — direkomendasikan untuk istirahat."
+    ? "Kurang dari 3 jam — hentikan aktifitas dan segera istirahat."
     : sleepHours <= 5
-      ? "3–5 jam — perlu observasi lebih lajut."
-      : "Di atas 5 jam — memenuhi batas Fit to Work.";
+      ? "3–5 jam — direkomendasikan istirahat cukup."
+      : sleepHours <= 7
+        ? "5–7 jam — lakukan istirahat berkala."
+        : sleepHours <= 9
+          ? "7–9 jam — dapat beraktifitas seperti biasa."
+          : "di atas 9 jam — sesuaikan istirahat sesuai kebutuhan.";
 }
 
 function getActiveTimezone() {
