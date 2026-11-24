@@ -543,9 +543,9 @@ async function syncBootstrapSettings() {
 }
 
 const statusDetails = {
-  fit_to_work: { label: "Fit to Work", pill: "status-fit", result: "result-fit", icon: "shield-check" },
-  need_observation: { label: "Need Observation", pill: "status-observe", result: "result-observe", icon: "eye" },
-  rest_recommended: { label: "Rest Recommended", pill: "status-rest", result: "result-rest", icon: "heart-pulse" }
+  fit_to_work: { label: "Fit Bekerja", pill: "status-fit", result: "result-fit", icon: "shield-check" },
+  need_observation: { label: "Perlu Evaluasi Medis", pill: "status-observe", result: "result-observe", icon: "eye" },
+  rest_recommended: { label: "Tidak Fit Bekerja", pill: "status-rest", result: "result-rest", icon: "heart-pulse" }
 };
 
 const symptomLabels = {
@@ -3718,7 +3718,7 @@ function showResult(payload, status, checkedAt, isOffline = false) {
   resultCard.innerHTML = `<div class="flex items-start gap-3">
     <span class="status-pill ${detail.pill}"><i data-lucide="${detail.icon}"></i></span>
     <div class="min-w-0 flex-1">
-      <p class="text-xs font-semibold text-slate-500">STATUS KESIAPAN HARIAN</p>
+      <p class="text-xs font-semibold text-slate-500">STATUS KESEHATAN PEKERJA</p>
       <h2 class="mt-1 font-display text-xl font-extrabold text-slate-900">${detail.label}</h2>
       <p class="mt-1 text-xs text-slate-500">${escapeHtml(employeeName)} · ${escapeHtml(formatDate(checkedAt))}</p>
     </div>

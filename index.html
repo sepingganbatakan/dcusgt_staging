@@ -311,9 +311,9 @@
           <label class="mt-3 block"><span class="field-label">Status kesiapan</span>
             <select id="history-readiness" class="field-input mt-2">
               <option value="">Semua status</option>
-              <option value="fit_to_work">Fit to Work</option>
-              <option value="need_observation">Perlu observasi</option>
-              <option value="rest_recommended">Istirahat disarankan</option>
+              <option value="fit_to_work">Fit Bekerja</option>
+              <option value="need_observation">Perlu Evaluasi Medis</option>
+              <option value="rest_recommended">Tidak Fit Bekerja</option>
             </select>
           </label>
           <button id="apply-filters" class="secondary-button mt-4 w-full" type="button"><i data-lucide="list-filter"></i> Terapkan filter</button>
@@ -353,9 +353,9 @@
             <p class="stat-label">Belum DCU<span id="stat-missing-department" class="hidden"></span></p>
             <p id="stat-missing-dcu" class="stat-value">—</p>
           </button>
-          <button class="stat-card summary-filter-card w-full text-left" data-summary-filter="fit_to_work" type="button" aria-label="Lihat riwayat Fit to Work"><span class="stat-icon green"><i data-lucide="shield-check"></i></span><p class="stat-label">Fit to Work</p><p id="stat-fit" class="stat-value">—</p></button>
-          <button class="stat-card summary-filter-card w-full text-left" data-summary-filter="need_observation" type="button" aria-label="Lihat riwayat yang perlu observasi"><span class="stat-icon amber"><i data-lucide="eye"></i></span><p class="stat-label">Perlu observasi</p><p id="stat-observe" class="stat-value">—</p></button>
-          <button class="stat-card summary-filter-card w-full text-left" data-summary-filter="rest_recommended" type="button" aria-label="Lihat riwayat istirahat disarankan"><span class="stat-icon rose"><i data-lucide="heart-pulse"></i></span><p class="stat-label">Istirahat disarankan</p><p id="stat-rest" class="stat-value">—</p></button>
+          <button class="stat-card summary-filter-card w-full text-left" data-summary-filter="fit_to_work" type="button" aria-label="Lihat riwayat Fit bekerja"><span class="stat-icon green"><i data-lucide="shield-check"></i></span><p class="stat-label">Fit Bekerja</p><p id="stat-fit" class="stat-value">—</p></button>
+          <button class="stat-card summary-filter-card w-full text-left" data-summary-filter="need_observation" type="button" aria-label="Lihat riwayat yang perlu evaluasi medis"><span class="stat-icon amber"><i data-lucide="eye"></i></span><p class="stat-label">Perlu Evaluasi Medis</p><p id="stat-observe" class="stat-value">—</p></button>
+          <button class="stat-card summary-filter-card w-full text-left" data-summary-filter="rest_recommended" type="button" aria-label="Lihat riwayat yang tidak fit bekerja"><span class="stat-icon rose"><i data-lucide="heart-pulse"></i></span><p class="stat-label">Tidak Fit Bekerja</p><p id="stat-rest" class="stat-value">—</p></button>
         </div>
               
       </section>
